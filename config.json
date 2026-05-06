@@ -1,40 +1,53 @@
 {
-  "app": { "name": "TechPower", "version": "1.0.0" },
+  "app": { "name": "TechPower", "version": "1.2.0" },
 
   "log_sources": {
     "wpilog": {
       "extensions": [".wpilog"],
       "keys": {
-        "battery_voltage":    "/Robot/SystemStats/BatteryVoltage",
-        "battery_current":    "/Robot/SystemStats/BatteryCurrent",
-        "brownout":           "/Robot/SystemStats/BrownedOut",
-        "enabled":            "DS:enabled",
-        "autonomous":         "DS:autonomous",
-        "pdp_channel_current":"/Robot/SystemStats/PowerDistribution/ChannelCurrent",
-        "pdp_voltage":        "/Robot/SystemStats/PowerDistribution/Voltage"
+        "battery_voltage":     "/Robot/SystemStats/BatteryVoltage",
+        "battery_current":     "/Robot/SystemStats/BatteryCurrent",
+        "brownout":            "/Robot/SystemStats/BrownedOut",
+        "enabled":             "DS:enabled",
+        "autonomous":          "DS:autonomous",
+        "pdp_channel_current": "/Robot/SystemStats/PowerDistribution/ChannelCurrent",
+        "pdp_voltage":         "/Robot/SystemStats/PowerDistribution/Voltage"
+      }
+    },
+
+    "hoot": {
+      "extensions": [".wpilog"],
+      "comment": "Hoot logs are wpilog files distinguished by their filename prefix after the match segment (01 = subsystems CANivore, CC = swerve CANivore).",
+      "prefix_map": {
+        "01": "subsystems",
+        "CC": "swerve"
+      },
+      "signal_keys": {
+        "stator_current": "StatorCurrent",
+        "supply_current": "SupplyCurrent",        
+        "stator_voltage": "StatorVoltage",
+        "supply_voltage": "SupplyVoltage",
+        "temperature":    "DeviceTemp"
       }
     }
   },
 
   "motors": [
-    { "id": "fl_drive",  "name": "FL Drive",  "channel": 3,  "subsystem_id": "swerve" },
-    { "id": "fl_steer",  "name": "FL Steer",  "channel": 4,  "subsystem_id": "swerve" },
-    { "id": "fr_drive",  "name": "FR Drive",  "channel": 6,  "subsystem_id": "swerve" },
-    { "id": "fr_steer",  "name": "FR Steer",  "channel": 7,  "subsystem_id": "swerve" },
-    { "id": "bl_drive",  "name": "BL Drive",  "channel": 11, "subsystem_id": "swerve" },
-    { "id": "bl_steer",  "name": "BL Steer",  "channel": 8,  "subsystem_id": "swerve" },
-    { "id": "br_drive",  "name": "BR Drive",  "channel": 15, "subsystem_id": "swerve" },
-    { "id": "br_steer",  "name": "BR Steer",  "channel": 9,  "subsystem_id": "swerve" },
-    { "id": "mech1",     "name": "Mech Ch12", "channel": 12, "subsystem_id": "swerve" },
-    { "id": "mech2",     "name": "Mech Ch13", "channel": 13, "subsystem_id": "swerve" },
-    { "id": "mech3",     "name": "Mech Ch14", "channel": 14, "subsystem_id": "swerve" },
-    { "id": "mech4",     "name": "Mech Ch16", "channel": 16, "subsystem_id": "swerve" },
-    { "id": "mech5",     "name": "Mech Ch17", "channel": 17, "subsystem_id": "swerve" },
-    { "id": "mech6",     "name": "Mech Ch19", "channel": 19, "subsystem_id": "swerve" },
-    { "id": "shooter",   "name": "Shooter Flywheel", "channel": 20, "subsystem_id": "subsystems" },
-    { "id": "hopper_r",  "name": "Hopper Roller",    "channel": 21, "subsystem_id": "subsystems" },
-    { "id": "hopper_f",  "name": "Hopper Floor",     "channel": 22, "subsystem_id": "subsystems" },
-    { "id": "intake",    "name": "Intake/Climb",     "channel": 23, "subsystem_id": "subsystems" }
+    { "id": "fl_drive",  "name": "FL Drive",         "channel": 3,  "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 1 },
+    { "id": "fl_steer",  "name": "FL Steer",          "channel": 4,  "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 2 },
+    { "id": "fr_drive",  "name": "FR Drive",          "channel": 6,  "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 3 },
+    { "id": "fr_steer",  "name": "FR Steer",          "channel": 7,  "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 4 },
+    { "id": "bl_drive",  "name": "BL Drive",          "channel": 11, "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 5 },
+    { "id": "bl_steer",  "name": "BL Steer",          "channel": 8,  "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 6 },
+    { "id": "br_drive",  "name": "BR Drive",          "channel": 15, "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 7 },
+    { "id": "br_steer",  "name": "BR Steer",          "channel": 9,  "subsystem_id": "swerve",     "hoot_bus": "swerve",     "talon_id": 8 },
+    { "id": "shooter",   "name": "Shooter Flywheel",  "channel": 20, "subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 1 },
+    { "id": "shooter2",  "name": "Shooter Follower",  "channel": null,"subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 2 },
+    { "id": "hopper_r",  "name": "Hopper Roller",     "channel": 21, "subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 3 },
+    { "id": "hopper_f",  "name": "Hopper Floor",      "channel": 22, "subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 4 },
+    { "id": "intake_p",  "name": "Intake Pivot",      "channel": null,"subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 5 },
+    { "id": "intake_f",  "name": "Intake Feed",       "channel": null,"subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 6 },
+    { "id": "climb",     "name": "Climb",             "channel": 23, "subsystem_id": "subsystems", "hoot_bus": "subsystems", "talon_id": 7, "optional": true }
   ],
 
   "subsystems": [
@@ -54,11 +67,15 @@
     "sessions": [
       {
         "id": "Q17", "name": "NYN2 Q17",
-        "wpilog": "assets/example-logs/Q17/FRC_20260407_183251_NYN2_Q17.wpilog"
+        "wpilog":           "assets/example-logs/Q17/FRC_20260407_183251_NYN2_Q17.wpilog",
+        "hoot_swerve":      "assets/example-logs/Q17/NYN2_Q17_CC478FD350374E53202020474C2210FF_2026-04-07_18-32-32.hoot.wpilog",
+        "hoot_subsystems":  "assets/example-logs/Q17/NYN2_Q17_01CED6FC46324B532020204A290812FF_2026-04-07_18-32-32.hoot.wpilog"
       },
       {
         "id": "E3", "name": "NYN2 E3",
-        "wpilog": "assets/example-logs/E3/FRC_20260408_183214_NYN2_E3.wpilog"
+        "wpilog":           "assets/example-logs/E3/FRC_20260408_183214_NYN2_E3.wpilog",
+        "hoot_swerve":      "assets/example-logs/E3/NYN2_E3_CC478FD350374E53202020474C2210FF_2026-04-08_18-31-54.hoot.wpilog",
+        "hoot_subsystems":  "assets/example-logs/E3/NYN2_E3_01CED6FC46324B532020204A290812FF_2026-04-08_18-31-54.hoot.wpilog"
       }
     ]
   }

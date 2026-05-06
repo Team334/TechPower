@@ -1,353 +1,520 @@
 """
 TechPower — Flask backend
-Run: flask run  or  python app.py
+Run:  flask run   or   python app.py
 """
-import json, os, math, struct
-from flask import Flask, render_template, request, jsonify, send_from_directory
-from wpilog_parser import parse_wpilog, extract_battery_data, build_match_segments
+
+import bisect
+import json
+import math
+import os
+import re
+import tempfile
+
+from flask import Flask, jsonify, render_template, request, send_from_directory
+
+from wpilog_parser import (
+    WPILogEntry,
+    build_match_segments,
+    extract_battery_data,
+    parse_wpilog,
+)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB upload limit
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256 MB
 
-# ── load config ────────────────────────────────────────────────────────────────
+# ── Load config ────────────────────────────────────────────────────────────────
 with open("config.json") as f:
     CONFIG = json.load(f)
 
-MOTORS     = {m["id"]: m for m in CONFIG["motors"]}
-SUBSYSTEMS = {s["id"]: s for s in CONFIG["subsystems"]}
+MOTORS      = {m["id"]: m for m in CONFIG["motors"]}
+SUBSYSTEMS  = {s["id"]: s for s in CONFIG["subsystems"]}
 RESAMPLE_HZ = CONFIG["timeline"]["resample_hz"]
 WH_DIV      = CONFIG["energy_calculation"]["wh_conversion"]
+PREFIX_MAP  = CONFIG["log_sources"]["hoot"]["prefix_map"]   # {"01": "subsystems", "CC": "swerve"}
+SIG_KEYS    = CONFIG["log_sources"]["hoot"]["signal_keys"]  # friendly-name → TalonFX suffix
 
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-def interp_at(records, t, keys=None):
-    """Linear-interpolate a (timestamp, value) list at time t."""
-    if not records:
-        return 0.0
-    if t <= records[0][0]:
-        return float(records[0][1])
-    if t >= records[-1][0]:
-        return float(records[-1][1])
-    
-    import bisect
-    # Use binary search to find the correct interval
-    if keys is None:
-        keys = [r[0] for r in records]
-    i = bisect.bisect_right(keys, t) - 1
-    if i < 0:
-        i = 0
-    if i >= len(records) - 1:
-        i = len(records) - 2
-        
-    t0, v0 = records[i]
-    t1, v1 = records[i + 1]
-    if t0 <= t <= t1:
-        alpha = (t - t0) / (t1 - t0) if t1 != t0 else 0
-        return float(v0) + alpha * float(v1 - v0)
-    return 0.0
+# ── Filename classifier ────────────────────────────────────────────────────────
+# Matches filenames like:
+#   FRC_20260407_183251_NYN2_Q17.wpilog                    → main
+#   NYN2_Q17_CC478FD…_2026-04-07_18-32-51.hoot.wpilog     → swerve
+#   NYN2_Q17_01CED6F…_2026-04-07_18-32-51.hoot.wpilog     → subsystems
+_HOOT_RE = re.compile(r"_([0-9A-Fa-f]{2})[0-9A-Fa-f]{30}_\d{4}-\d{2}-\d{2}_", re.IGNORECASE)
 
 
-def resample(records, t_start, t_end, hz=RESAMPLE_HZ):
-    """Return evenly-spaced (t, v) list."""
-    if not records or t_end <= t_start:
-        return []
-    dt = 1.0 / hz
-    out = []
-    t = t_start
-    keys = [r[0] for r in records]
-    while t <= t_end + 1e-9:
-        out.append((round(t, 4), interp_at(records, t, keys)))
-        t += dt
-    return out
+def classify_filename(name: str) -> str:
+    """Return 'main', 'swerve', or 'subsystems' based on filename."""
+    m = _HOOT_RE.search(name)
+    if not m:
+        return "main"
+    prefix = m.group(1).upper()
+    return PREFIX_MAP.get(prefix, "unknown")
 
 
-def channel_power_records(channel_current_records, voltage_records):
-    """Multiply per-channel current × battery voltage → power records."""
-    if not channel_current_records or not voltage_records:
-        return []
-    out = []
-    keys = [r[0] for r in voltage_records]
-    for t, amps in channel_current_records:
-        v = interp_at(voltage_records, t, keys)
-        out.append((t, amps * v))
-    return out
-
-
-def energy_wh(power_records):
-    """Trapezoidal integration → Wh."""
-    total = 0.0
-    for i in range(1, len(power_records)):
-        t0, p0 = power_records[i - 1]
-        t1, p1 = power_records[i]
-        total += (p0 + p1) / 2 * (t1 - t0)
-    return total / WH_DIV
-
-
-def compute_motor_stats(motor_cfg, entries, battery_voltage):
-    """Return dict of stats for one motor given its PDP channel."""
-    ch  = motor_cfg["channel"]
-    key = CONFIG["log_sources"]["wpilog"]["keys"]["pdp_channel_current"]
-
-    # PDP channel current is stored as an array per timestamp
-    ch_records = []
-    if key in entries:
-        for t, arr in entries[key].records:
-            if isinstance(arr, list) and ch < len(arr):
-                ch_records.append((t, arr[ch]))
-
-    if not ch_records:
-        return None
-
-    power_recs = channel_power_records(ch_records, battery_voltage)
-    if not power_recs:
-        return None
-
-    powers = [p for _, p in power_recs]
-    energy = energy_wh(power_recs)
-    avg_p  = sum(powers) / len(powers)
-    peak_p = max(powers)
-    avg_a  = sum(a for _, a in ch_records) / len(ch_records)
-
-    # stator current — try Talon/Kraken logging path
-    stator_key = f"/Robot/Motors/{motor_cfg['id']}/StatorCurrent"
-    stator_recs = entries.get(stator_key, None)
-    avg_stator = max_stator = 0.0
-    if stator_recs and stator_recs.records:
-        vals = [v for _, v in stator_recs.records]
-        avg_stator = sum(vals) / len(vals)
-        max_stator = max(vals)
-
-    return {
-        "id":         motor_cfg["id"],
-        "name":       motor_cfg["name"],
-        "subsystem":  motor_cfg["subsystem_id"],
-        "channel":    ch,
-        "energy_wh":  round(energy, 3),
-        "avg_power":  round(avg_p, 2),
-        "peak_power": round(peak_p, 2),
-        "avg_supply": round(avg_a, 3),
-        "avg_stator": round(avg_stator, 3),
-        "max_stator": round(max_stator, 3),
-    }
-
-
-def build_timeline(entries, battery, t_start, t_end):
-    """
-    Build a resampled timeline dict:
-      timestamps, total_power, per-subsystem power arrays
-    """
-    hz = RESAMPLE_HZ
-    dt = 1.0 / hz
-    times = []
-    t = t_start
-    while t <= t_end + 1e-9:
-        times.append(round(t, 4))
-        t += dt
-
-    # total battery power = V × I
-    voltage = battery["voltage"]
-    current = battery["current"]
-    total_power = []
-    v_keys = [r[0] for r in voltage] if voltage else []
-    i_keys = [r[0] for r in current] if current else []
-    for t in times:
-        v = interp_at(voltage, t, v_keys)
-        i = interp_at(current, t, i_keys)
-        total_power.append(round(v * i, 2))
-
-    # per-subsystem: sum motor channel powers
-    key = CONFIG["log_sources"]["wpilog"]["keys"]["pdp_channel_current"]
-    pdp_entry = entries.get(key)
-
-    subsys_power = {sid: [0.0] * len(times) for sid in SUBSYSTEMS}
-
-    if pdp_entry:
-        ch_arrays = pdp_entry.records  # [(t, [ch0..chN]), ...]
-        for motor in CONFIG["motors"]:
-            ch  = motor["channel"]
-            sid = motor["subsystem_id"]
-            ch_records = []
-            for t_r, arr in ch_arrays:
-                if isinstance(arr, list) and ch < len(arr):
-                    ch_records.append((t_r, arr[ch]))
-            c_keys = [r[0] for r in ch_records] if ch_records else []
-            for idx, t in enumerate(times):
-                amps = interp_at(ch_records, t, c_keys)
-                v    = interp_at(voltage, t, v_keys)
-                subsys_power[sid][idx] = round(subsys_power[sid][idx] + amps * v, 2)
-
-    return {
-        "timestamps":    times,
-        "total_power":   total_power,
-        "subsys_power":  subsys_power,
-    }
-
-
-def process_log(filepath):
-    entries = parse_wpilog(filepath)
-    battery = extract_battery_data(entries, CONFIG)
-    segments = build_match_segments(battery)
-
-    all_times = [t for t, _ in battery["voltage"]] + [t for t, _ in battery["current"]]
-    if not all_times:
-        return {"error": "No battery data found in log."}
-
-    t_start = min(all_times)
-    t_end   = max(all_times)
-    duration = t_end - t_start
-
-    # motor stats
-    motor_stats = []
-    for m in CONFIG["motors"]:
-        s = compute_motor_stats(m, entries, battery["voltage"])
-        if s:
-            motor_stats.append(s)
-
-    # subsystem rollups
-    subsys_stats = {}
-    for sid, sub in SUBSYSTEMS.items():
-        motors_in = [s for s in motor_stats if s["subsystem"] == sid]
-        subsys_stats[sid] = {
-            "id":       sid,
-            "name":     sub["name"],
-            "color":    sub["color"],
-            "energy_wh":  round(sum(m["energy_wh"]  for m in motors_in), 3),
-            "avg_power":  round(sum(m["avg_power"]   for m in motors_in), 2),
-            "peak_power": round(max((m["peak_power"] for m in motors_in), default=0), 2),
-            "motors":   motors_in,
-        }
-
-    total_energy = round(sum(s["energy_wh"] for s in subsys_stats.values()), 3)
-    peak_power   = round(max(
-        (v for vals in build_timeline(entries, battery, t_start, t_end)["subsys_power"].values()
-         for v in vals), default=0), 2)
-    brownouts    = len(battery["brownout_times"])
-
-    timeline = build_timeline(entries, battery, t_start, t_end)
-
-    return {
-        "duration":       round(duration, 2),
-        "t_start":        round(t_start, 4),
-        "t_end":          round(t_end, 4),
-        "total_energy":   total_energy,
-        "peak_power":     peak_power,
-        "brownouts":      brownouts,
-        "brownout_times": battery["brownout_times"],
-        "subsystems":     list(subsys_stats.values()),
-        "motors":         motor_stats,
-        "segments":       segments,
-        "timeline":       timeline,
-    }
-
-
-# ── routes ────────────────────────────────────────────────────────────────────
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    return render_template("index.html", config=CONFIG)
+    sessions = CONFIG.get("example_logs", {}).get("sessions", [])
+    return render_template("index.html", example_sessions=sessions)
 
 
-@app.route("/api/upload", methods=["POST"])
-def upload():
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
+    """Accept 1–3 uploaded log files, parse them, return JSON analysis."""
     files = request.files.getlist("logs")
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
 
-    results = []
-    import tempfile
+    # Save to temp files and classify
+    saved = {}  # role → filepath
+    tmp_paths = []
+
     for f in files:
-        with tempfile.NamedTemporaryFile(suffix=".wpilog", delete=False) as tmp:
+        role = classify_filename(f.filename)
+        suffix = ".wpilog"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             f.save(tmp.name)
+            tmp_paths.append(tmp.name)
+            saved[role] = tmp.name
+
+    try:
+        result = run_analysis(saved, match_name=_infer_match_name(files[0].filename))
+    finally:
+        for p in tmp_paths:
             try:
-                data = process_log(tmp.name)
-                data["filename"] = f.filename
-                results.append(data)
-            except Exception as e:
-                results.append({"filename": f.filename, "error": str(e)})
-            finally:
-                os.unlink(tmp.name)
+                os.unlink(p)
+            except OSError:
+                pass
 
-    if len(results) == 1:
-        return jsonify(results[0])
-    return jsonify({"merged": results})
+    return jsonify(result)
 
 
-@app.route("/api/session/<session_id>")
-def load_session(session_id):
-    sessions = {s["id"]: s for s in CONFIG["example_logs"]["sessions"]}
+@app.route("/api/example/<session_id>")
+def example(session_id: str):
+    """Load a bundled example session by ID."""
+    sessions = {s["id"]: s for s in CONFIG.get("example_logs", {}).get("sessions", [])}
     if session_id not in sessions:
         return jsonify({"error": "Unknown session"}), 404
+
     sess = sessions[session_id]
-    path = os.path.join(os.path.dirname(__file__), sess["wpilog"])
-    if not os.path.exists(path):
-        return jsonify({"error": f"Log file not found: {sess['wpilog']}"}), 404
-    try:
-        data = process_log(path)
-        data["filename"] = sess["name"]
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    saved = {
+        "main":       sess["wpilog"],
+        "swerve":     sess["hoot_swerve"],
+        "subsystems": sess["hoot_subsystems"],
+    }
+    result = run_analysis(saved, match_name=sess["name"])
+    return jsonify(result)
 
 
-@app.route("/static/<path:path>")
-def static_files(path):
-    return send_from_directory("static", path)
+# ── Core analysis ──────────────────────────────────────────────────────────────
+
+def run_analysis(paths: dict, match_name: str = "Match") -> dict:
+    """
+    paths = {"main": filepath, "swerve": filepath, "subsystems": filepath}
+    Returns the full JSON payload consumed by the frontend.
+    """
+    main_entries   = parse_wpilog(paths["main"])        if "main"        in paths else {}
+    swerve_entries = parse_wpilog(paths["swerve"])      if "swerve"      in paths else {}
+    subsys_entries = parse_wpilog(paths["subsystems"])  if "subsystems"  in paths else {}
+
+    battery      = extract_battery_data(main_entries, CONFIG)
+    segments_raw = build_match_segments(battery)
+
+    segments = []
+    for seg in segments_raw:
+        t = seg.get("mode") or seg.get("type", "disabled")
+        if t == "auton":
+            t = "auto"
+        segments.append({"start": seg["start"], "end": seg["end"], "type": t})
+
+    v_records = battery["voltage"]
+    i_records = battery["current"]
+    t_start   = v_records[0][0]  if v_records else 0.0
+    t_end     = v_records[-1][0] if v_records else 0.0
+    if not t_end:
+        t_end = i_records[-1][0] if i_records else 0.0
+    duration = t_end - t_start
+
+    timeline_full = _resample_timeline(battery, t_start, t_end)
+    times_full    = timeline_full["time"]
+
+    # Thin to 25 Hz for payload
+    THIN = 2
+    times_thin = timeline_full["time"][::THIN]
+    timeline = {
+        "time":            times_thin,
+        "battery_voltage": timeline_full["battery_voltage"][::THIN],
+        "battery_current": timeline_full["battery_current"][::THIN],
+    }
+
+    # ── Per-motor hoot timeseries ─────────────────────────────────────────────
+    hoot_map = {"swerve": swerve_entries, "subsystems": subsys_entries}
+
+    stator_by_motor  = {}   # motor_id → list[float]  (thinned)
+    supply_by_motor  = {}
+    stator_v_by_motor = {}
+    temp_by_motor    = {}
+
+    for motor in CONFIG["motors"]:
+        mid      = motor["id"]
+        bus_name = motor.get("hoot_bus")
+        talon_id = motor.get("talon_id")
+        if bus_name is None or talon_id is None or bus_name not in hoot_map:
+            continue
+        entries = hoot_map[bus_name]
+        if not entries:
+            continue
+
+        def _thin_signal(sig_name):
+            e = _find_hoot_entry(entries, bus_name, talon_id, sig_name)
+            if not e:
+                return None
+            records = [(t - t_start, v) for t, v in e.records if t >= t_start]
+            full = _resample_records(records, times_full)
+            return [_r(v) for v in full[::THIN]]
+
+        sc = _thin_signal("stator_current")
+        if sc:
+            stator_by_motor[mid] = sc
+
+        sup = _thin_signal("supply_current")
+        if sup:
+            supply_by_motor[mid] = sup
+
+        sv = _thin_signal("stator_voltage")
+        if sv:
+            stator_v_by_motor[mid] = sv
+
+        tmp = _thin_signal("temperature")
+        if tmp:
+            temp_by_motor[mid] = tmp
+
+    # Attach motor timeseries to timeline
+    if stator_by_motor:
+        timeline["stator_current_by_motor"]  = stator_by_motor
+    if supply_by_motor:
+        timeline["supply_current_by_motor"]  = supply_by_motor
+    if stator_v_by_motor:
+        timeline["stator_voltage_by_motor"]  = stator_v_by_motor
+    if temp_by_motor:
+        timeline["temp_by_motor"]            = temp_by_motor
+
+    # ── Brownouts ─────────────────────────────────────────────────────────────
+    brownout_events = [
+        {"time": round(t - t_start, 4)}
+        for t in battery["brownout_times"]
+        if t_start <= t <= t_end
+    ]
+
+    # ── Summary stats ─────────────────────────────────────────────────────────
+    volts = timeline_full["battery_voltage"]
+    amps  = timeline_full["battery_current"]
+
+    peak_voltage = max(volts) if volts else None
+    min_voltage  = min(volts) if volts else None
+    peak_current = max(amps)  if amps  else None
+    avg_current  = _mean(amps)
+
+    total_energy_wh = _integrate_power(times_full, volts, amps) / WH_DIV
+
+    energy_by_segment = _energy_per_segment(timeline_full, segments)
+
+    # ── Motor stats ────────────────────────────────────────────────────────────
+    motor_stats = _build_motor_stats(hoot_map)
+
+    # ── Energy by subsystem ────────────────────────────────────────────────────
+    # Use the SAME per-motor supply timeseries we already computed so the
+    # numbers are consistent with what the charts display.
+    energy_by_subsystem = _energy_by_subsystem_from_timeseries(
+        supply_by_motor, timeline_full, t_start, times_thin
+    )
+
+    return {
+        "match_name":    match_name,
+        "duration":      round(duration, 3),
+        "t_start":       round(t_start, 3),
+        "timeline":      timeline,
+        "match_segments":    segments,
+        "brownout_events":   brownout_events,
+        "brownout_count":    len(brownout_events),
+        "peak_voltage":      _r(peak_voltage),
+        "min_voltage":       _r(min_voltage),
+        "peak_current":      _r(peak_current),
+        "avg_current":       _r(avg_current),
+        "total_energy_wh":   _r(total_energy_wh),
+        "energy_by_segment": energy_by_segment,
+        "energy_by_subsystem": energy_by_subsystem,
+        "motors":            motor_stats,
+    }
 
 
-@app.route("/api/debug/<session_id>")
-def debug_session(session_id):
-    """Returns raw parse info — open this in your browser to diagnose loading issues."""
-    sessions = {s["id"]: s for s in CONFIG["example_logs"]["sessions"]}
-    if session_id not in sessions:
-        return jsonify({"error": "Unknown session"}), 404
-    sess = sessions[session_id]
-    path = os.path.join(os.path.dirname(__file__), sess["wpilog"])
+def _energy_by_subsystem_from_timeseries(
+    supply_by_motor: dict,
+    timeline_full: dict,
+    t_start: float,
+    times_thin: list,
+) -> dict:
+    """
+    Compute per-subsystem Wh from the pre-resampled per-motor supply-current
+    timeseries (same data the charts use) so the numbers are always consistent.
 
-    if not os.path.exists(path):
-        return jsonify({"error": f"File not found", "looked_at": path})
+    supply_by_motor : {motor_id: [float, …]}  — already thinned (25 Hz)
+    timeline_full   : full 50 Hz timeline (for battery voltage)
+    times_thin      : the 25 Hz time axis matching supply_by_motor arrays
+    """
+    # We need voltage at the same 25 Hz grid.
+    # timeline_full is 50 Hz; thin it 2× to align.
+    volts_thin = timeline_full["battery_voltage"][::2]
 
-    try:
-        entries = parse_wpilog(path)
-        key_sample = list(entries.keys())[:60]
+    # Make sure lengths align (could differ by 1 due to int division)
+    n = min(len(times_thin), len(volts_thin))
+    times_thin = times_thin[:n]
+    volts_thin = volts_thin[:n]
 
-        # Check for each config key
-        wpilog_keys = CONFIG["log_sources"]["wpilog"]["keys"]
-        key_check = {}
-        for field, k in wpilog_keys.items():
-            entry = entries.get(k)
-            key_check[field] = {
-                "key": k,
-                "found": entry is not None,
-                "type": entry.type_str if entry else None,
-                "record_count": len(entry.records) if entry else 0,
-                "sample": str(entry.records[0]) if entry and entry.records else None,
-            }
+    # Map motor → subsystem bus
+    motor_bus = {m["id"]: m.get("hoot_bus") for m in CONFIG["motors"]}
 
-        # PDP channel array shape
-        pdp_key = wpilog_keys["pdp_channel_current"]
-        pdp_entry = entries.get(pdp_key)
-        pdp_info = None
-        if pdp_entry and pdp_entry.records:
-            t0, v0 = pdp_entry.records[0]
-            pdp_info = {
-                "record_count": len(pdp_entry.records),
-                "type_str": pdp_entry.type_str,
-                "first_value_type": type(v0).__name__,
-                "first_value_len": len(v0) if isinstance(v0, list) else "scalar",
-                "first_value_sample": v0[:5] if isinstance(v0, list) else v0,
-            }
+    # Accumulate per-bus total-current arrays
+    bus_current: dict[str, list] = {}
+    for mid, currents in supply_by_motor.items():
+        bus = motor_bus.get(mid)
+        if bus is None:
+            continue
+        cur = currents[:n]  # align length
+        if bus not in bus_current:
+            bus_current[bus] = [0.0] * n
+        for i, v in enumerate(cur):
+            bus_current[bus][i] += abs(v) if v is not None else 0.0
 
-        return jsonify({
-            "file": path,
-            "total_entries": len(entries),
-            "key_check": key_check,
-            "pdp_info": pdp_info,
-            "all_keys_sample": key_sample,
+    result = {}
+    for bus, cur in bus_current.items():
+        wh = _integrate_power(times_thin, volts_thin, cur) / WH_DIV
+        if wh > 0:
+            result[bus] = _r(wh)
+
+    return result 
+
+# ── Resampling ─────────────────────────────────────────────────────────────────
+
+def _resample_timeline(battery: dict, t_start: float, t_end: float) -> dict:
+    """Resample voltage & current to a uniform RESAMPLE_HZ grid."""
+    dt = 1.0 / RESAMPLE_HZ
+    n  = max(2, int((t_end - t_start) * RESAMPLE_HZ) + 1)
+    times = [round(i * dt, 4) for i in range(n)]    # relative to t_start
+
+    v_abs = [(t, v) for t, v in battery["voltage"] if t_start <= t <= t_end]
+    i_abs = [(t, v) for t, v in battery["current"] if t_start <= t <= t_end]
+
+    def resample(records):
+        if not records:
+            return [0.0] * n
+        out = []
+        ri = 0
+        for ti in times:
+            t_abs = ti + t_start
+            while ri + 1 < len(records) and records[ri + 1][0] <= t_abs:
+                ri += 1
+            out.append(_r(records[ri][1]))
+        return out
+
+    return {
+        "time":            times,
+        "battery_voltage": resample(v_abs),
+        "battery_current": resample(i_abs),
+    }
+
+
+# ── Energy calculations ────────────────────────────────────────────────────────
+
+def _integrate_power(times, volts, amps) -> float:
+    """Trapezoidal integration of V*I over time → Joules."""
+    if len(times) < 2:
+        return 0.0
+    total = 0.0
+    for i in range(1, len(times)):
+        dt = times[i] - times[i - 1]
+        p  = 0.5 * (volts[i] * amps[i] + volts[i - 1] * amps[i - 1])
+        total += p * dt
+    return total
+
+
+def _energy_per_segment(timeline: dict, segments: list) -> list:
+    """Return Wh consumed in each match segment."""
+    times = timeline["time"]
+    volts = timeline["battery_voltage"]
+    amps  = timeline["battery_current"]
+    result = []
+
+    for idx, seg in enumerate(segments):
+        js = [j for j, t in enumerate(times) if seg["start"] <= t <= seg["end"]]
+        if len(js) < 2:
+            continue
+        seg_v = [volts[j] for j in js]
+        seg_i = [amps[j]  for j in js]
+        seg_t = [times[j] for j in js]
+        wh = _integrate_power(seg_t, seg_v, seg_i) / WH_DIV
+        label = f"{seg['type'].capitalize()} {idx + 1}"
+        result.append({"label": label, "type": seg["type"], "wh": _r(wh)})
+
+    return result
+
+
+
+def _resample_records(records: list, times: list) -> list:
+    """
+    Resample (t, v) records onto a uniform times grid using ZOH (hold last value).
+    Uses bisect for O(n log m) instead of O(n*m).
+    """
+    if not records:
+        return [0.0] * len(times)
+    ts = [r[0] for r in records]
+    vs = [r[1] for r in records]
+    out = []
+    for t in times:
+        i = bisect.bisect_right(ts, t) - 1
+        out.append(vs[i] if i >= 0 else vs[0])
+    return out
+
+
+# ── Hoot key lookup ────────────────────────────────────────────────────────────
+# Keys in Phoenix 6 hoot files follow: /Phoenix6/TalonFX-<id>/<SignalSuffix>
+
+
+def _find_hoot_entry(entries: dict, bus_name: str, talon_id: int, signal_name: str):
+    """
+    Search entries for a Phoenix 6 TalonFX signal.
+    Hoot wpilog keys follow:  /Phoenix6/TalonFX-<id>/<SignalSuffix>
+    e.g. /Phoenix6/TalonFX-1/StatorCurrent
+    """
+    suffix = SIG_KEYS.get(signal_name, signal_name)
+    patterns = [
+        f"/Phoenix6/TalonFX-{talon_id}/{suffix}",          # primary Phoenix 6 path
+        f"Phoenix6/TalonFX-{talon_id}/{suffix}",
+        f"/TalonFX/{talon_id}/{suffix}",                    # legacy fallbacks
+        f"/{bus_name}/TalonFX/{talon_id}/{suffix}",
+        f"/Subsystems/TalonFX/{talon_id}/{suffix}",
+        f"/Swerve/TalonFX/{talon_id}/{suffix}",
+    ]
+    for p in patterns:
+        if p in entries:
+            return entries[p]
+    # Fuzzy: any key containing TalonFX-<id>/<suffix>
+    tail = f"TalonFX-{talon_id}/{suffix}"
+    for key, entry in entries.items():
+        if key.endswith(tail):
+            return entry
+    return None
+
+
+# Patch _build_motor_stats to use _find_hoot_entry instead of direct dict lookup
+def _build_motor_stats(hoot_map: dict) -> list:  # noqa: F811 (redefinition)
+    stats = []
+
+    for motor in CONFIG["motors"]:
+        mid       = motor["id"]
+        bus_name  = motor.get("hoot_bus")
+        talon_id  = motor.get("talon_id")
+        subsys_id = motor.get("subsystem_id", "")
+        subsys    = SUBSYSTEMS.get(subsys_id, {})
+        color     = subsys.get("color", "#888")
+
+        entry_base = {
+            "id":        mid,
+            "name":      motor["name"],
+            "subsystem": subsys.get("name", subsys_id),
+            "color":     color,
+            "channel":   motor.get("channel"),
+        }
+
+        if bus_name is None or talon_id is None or bus_name not in hoot_map:
+            stats.append({**entry_base,
+                "peak_stator_current": None, "peak_supply_current": None,
+                "avg_supply_current":  None, "max_temp": None,
+                "avg_temp": None, "energy_wh": None})
+            continue
+
+        entries = hoot_map[bus_name]
+        if not entries:
+            stats.append({**entry_base,
+                "peak_stator_current": None, "peak_supply_current": None,
+                "avg_supply_current":  None, "max_temp": None,
+                "avg_temp": None, "energy_wh": None})
+            continue
+
+        def get_entry(sig):
+            return _find_hoot_entry(entries, bus_name, talon_id, sig)
+
+        def get_vals(sig):
+            e = get_entry(sig)
+            return [v for _, v in e.records] if e else []
+
+        stator_vals = get_vals("stator_current")
+        supply_vals = get_vals("supply_current")
+        temp_vals   = get_vals("temperature")
+
+        def safe_peak(vals):
+            return _r(max(abs(v) for v in vals)) if vals else None
+
+        def safe_mean(vals):
+            return _r(_mean([abs(v) for v in vals])) if vals else None
+
+        # Motor energy
+        sv_entry = get_entry("supply_voltage")
+        sc_entry = get_entry("supply_current")
+        energy_wh = None
+        if sv_entry and sc_entry:
+            sv_times = [t for t, _ in sv_entry.records]
+            sv_vals  = [v for _, v in sv_entry.records]
+            sc_times = [t for t, _ in sc_entry.records]
+            sc_vals  = [v for _, v in sc_entry.records]
+            if sv_times and sc_times:
+                sc_resampled = _resample_records(list(zip(sc_times, sc_vals)), sv_times)
+                energy_wh = _r(
+                    _integrate_power(sv_times, sv_vals, [abs(v) for v in sc_resampled]) / WH_DIV
+                )
+
+        stats.append({
+            **entry_base,
+            "peak_stator_current": safe_peak(stator_vals),
+            "peak_supply_current": safe_peak(supply_vals),
+            "avg_supply_current":  safe_mean(supply_vals),
+            "max_temp":            safe_peak(temp_vals),
+            "avg_temp":            safe_mean(temp_vals),
+            "energy_wh":           energy_wh,
         })
-    except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()})
 
+    return stats
+
+
+# ── Utility helpers ────────────────────────────────────────────────────────────
+
+def _mean(vals: list) -> float:
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _r(v, digits: int = 3):
+    """Round a value, return None if None/NaN."""
+    if v is None:
+        return None
+    try:
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return round(float(v), digits)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_match_name(filename: str) -> str:
+    """Extract e.g. 'NYN2 Q17' from FRC_20260407_183251_NYN2_Q17.wpilog"""
+    base = os.path.splitext(os.path.basename(filename))[0]
+    # FRC_YYYYMMDD_HHMMSS_EVENT_MATCH
+    m = re.match(r"FRC_\d{8}_\d{6}_(.+)", base)
+    if m:
+        return m.group(1).replace("_", " ")
+    return base
+
+
+# ── Dev server ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)

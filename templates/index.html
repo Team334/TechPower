@@ -7,239 +7,1108 @@
     <title>TechPower</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600&display=swap"
+        rel="stylesheet">
     <style>
-        body {
-            background: #0f1117;
-            color: #e2e8f0;
-            font-family: system-ui, sans-serif;
+        :root {
+            --bg-base: #0b0e17;
+            --bg-surface: #111520;
+            --bg-card: #161b28;
+            --bg-raised: #1c2233;
+            --border: #232b3d;
+            --border-med: #2d3748;
+            --text-1: #e2e8f0;
+            --text-2: #94a3b8;
+            --text-3: #64748b;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.15);
+            --green: #34d399;
+            --orange: #f97316;
+            --amber: #f59e0b;
+            --red: #ef4444;
+            --auto-col: #f59e0b;
+            --teleop-col: #3b82f6;
+            --disabled-col: #374151;
         }
 
-        .card {
-            background: #1a1f2e;
-            border: 1px solid #2d3748;
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: var(--bg-base);
+            color: var(--text-1);
+            font-family: 'DM Sans', system-ui, sans-serif;
+            min-height: 100vh;
+            font-size: 14px;
+        }
+
+        /* ── App shell ── */
+        .app-header {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        .app-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: -0.02em;
+            color: var(--text-1);
+        }
+
+        .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #3b82f6, #06b6d4);
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .version-badge {
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-3);
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            padding: 2px 8px;
+            border-radius: 20px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* ── Upload Panel ── */
+        #upload-panel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: calc(100vh - 52px);
+            padding: 40px 24px;
+        }
+
+        .upload-inner {
+            width: 100%;
+            max-width: 640px;
+        }
+
+        .upload-headline {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .upload-headline h1 {
+            font-size: 28px;
+            font-weight: 600;
+            letter-spacing: -0.03em;
+            color: var(--text-1);
+            margin-bottom: 8px;
+        }
+
+        .upload-headline p {
+            color: var(--text-2);
+            font-size: 14px;
+        }
+
+        #drop-zone {
+            border: 2px dashed var(--border-med);
+            border-radius: 14px;
+            background: var(--bg-surface);
+            padding: 48px 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            margin-bottom: 20px;
+        }
+
+        #drop-zone:hover,
+        #drop-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.04);
+        }
+
+        .drop-icon {
+            width: 52px;
+            height: 52px;
+            background: var(--bg-raised);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            border: 1px solid var(--border);
+        }
+
+        .drop-icon svg {
+            stroke: var(--text-2);
+        }
+
+        .drop-title {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+
+        .drop-sub {
+            font-size: 13px;
+            color: var(--text-2);
+        }
+
+        .file-types {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+
+        .file-type-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-3);
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            padding: 3px 10px;
+            border-radius: 20px;
+        }
+
+        #upload-status {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 12px 0;
+            min-height: 32px;
+        }
+
+        .file-chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-2);
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            padding: 5px 10px;
+            border-radius: 6px;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-chip svg {
+            flex-shrink: 0;
+            stroke: var(--text-3);
+        }
+
+        .error-msg {
+            color: var(--red);
+            font-size: 13px;
+            padding: 8px 12px;
+            background: rgba(239, 68, 68, 0.08);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 8px;
+            width: 100%;
+        }
+
+        .info-msg {
+            color: var(--text-2);
+            font-size: 13px;
+        }
+
+        #upload-progress {
+            display: none;
+            width: 100%;
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 12px 0;
+        }
+
+        #upload-progress::after {
+            content: '';
+            display: block;
+            height: 100%;
+            width: 30%;
+            background: var(--accent);
+            border-radius: 2px;
+            animation: progressSlide 1.2s ease-in-out infinite;
+        }
+
+        @keyframes progressSlide {
+            0% {
+                transform: translateX(-100%) scaleX(0.5);
+            }
+
+            50% {
+                transform: translateX(100%) scaleX(1.5);
+            }
+
+            100% {
+                transform: translateX(300%) scaleX(0.5);
+            }
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 12px;
+            transition: opacity 0.15s;
+            font-family: inherit;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.88;
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-2);
+            border: 1px solid var(--border);
+            padding: 8px 18px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+            font-family: inherit;
+        }
+
+        .btn-ghost:hover {
+            border-color: var(--accent);
+            color: var(--text-1);
+        }
+
+        .example-section {
+            margin-top: 24px;
+            text-align: center;
+        }
+
+        .example-label {
+            font-size: 12px;
+            color: var(--text-3);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 10px;
+        }
+
+        .example-btns {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .example-btn {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-2);
+            border: 1px solid var(--border);
+            background: var(--bg-raised);
+            padding: 6px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+        }
+
+        .example-btn:hover {
+            border-color: var(--accent);
+            color: var(--text-1);
+        }
+
+        /* ── Dashboard Panel ── */
+        #dashboard-panel {
+            display: none;
+        }
+
+        .dash-header {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .match-info h2 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .match-info span {
+            font-size: 12px;
+            color: var(--text-3);
+        }
+
+        /* Summary cards */
+        .summary-cards-wrap {
+            padding: 16px 24px 0;
+        }
+
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+        }
+
+        .summary-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 10px;
+            padding: 12px 14px;
+            transition: border-color 0.15s;
+        }
+
+        .summary-card:hover {
+            border-color: var(--border-med);
+        }
+
+        .summary-card.card-warn {
+            border-color: rgba(239, 68, 68, 0.3);
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .card-label {
+            font-size: 11px;
+            color: var(--text-3);
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            margin-bottom: 5px;
+        }
+
+        .card-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-1);
+        }
+
+        /* ── Time Bar ── */
+        .timebar-section {
+            padding: 16px 24px 8px;
+        }
+
+        .timebar-wrap {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 14px;
+        }
+
+        .timebar-labels {
+            position: relative;
+            height: 18px;
+            margin-bottom: 3px;
+        }
+
+        .tb-marker {
+            position: absolute;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-3);
+            transform: translateX(-50%);
+            user-select: none;
+        }
+
+        .timebar-track {
+            position: relative;
+            height: 20px;
+            background: var(--bg-raised);
+            border-radius: 5px;
+            cursor: pointer;
+            overflow: hidden;
+            user-select: none;
+            border: 1px solid var(--border);
+        }
+
+        .seg-track {
+            position: absolute;
+            inset: 0;
+        }
+
+        .seg-block {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            opacity: 0.75;
+        }
+
+        .seg-auto {
+            background: var(--auto-col);
+        }
+
+        .seg-teleop {
+            background: var(--teleop-col);
+        }
+
+        .seg-disabled {
+            background: var(--disabled-col);
+        }
+
+        .brownout-layer {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .brownout-tick {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: var(--red);
+            opacity: 0.9;
+            border-radius: 1px;
+            transform: translateX(-50%);
+            z-index: 10;
+            animation: brownout-pulse 1.2s ease-in-out infinite;
+        }
+
+        @keyframes brownout-pulse {
+
+            0%,
+            100% {
+                opacity: 0.9;
+                box-shadow: 0 0 3px var(--red);
+            }
+
+            50% {
+                opacity: 0.5;
+                box-shadow: 0 0 8px var(--red);
+            }
+        }
+
+        /* Zoom overlay on timebar */
+        .timebar-zoom-overlay {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            background: rgba(59, 130, 246, 0.14);
+            border-left: 2px solid rgba(59, 130, 246, 0.6);
+            border-right: 2px solid rgba(59, 130, 246, 0.6);
+            pointer-events: none;
+            z-index: 5;
+            transition: left 0.04s, right 0.04s;
+        }
+
+        .timebar-cursor {
+            position: absolute;
+            top: -1px;
+            bottom: -1px;
+            width: 2px;
+            background: #fff;
+            border-radius: 1px;
+            z-index: 20;
+            pointer-events: none;
+            box-shadow: 0 0 6px rgba(255, 255, 255, 0.4);
+            transform: translateX(-50%);
+        }
+
+        .timebar-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+
+        .tb-btn {
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            color: var(--text-1);
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            transition: border-color 0.15s;
+        }
+
+        .tb-btn:hover {
+            border-color: var(--accent);
+        }
+
+        .tb-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-1);
+            min-width: 60px;
+        }
+
+        .tb-duration {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-3);
+        }
+
+        .tb-legend {
+            display: flex;
+            gap: 14px;
+            margin-left: auto;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .leg-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            color: var(--text-2);
+        }
+
+        .leg-swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        .leg-auto {
+            background: var(--auto-col);
+        }
+
+        .leg-teleop {
+            background: var(--teleop-col);
+        }
+
+        .leg-disabled {
+            background: var(--disabled-col);
+        }
+
+        .leg-brownout {
+            background: var(--red);
+        }
+
+        /* ── Tabs — centered and larger ── */
+        .tabs-section {
+            padding: 16px 24px 0;
+        }
+
+        .tabs {
+            display: flex;
+            justify-content: center;
+            /* CENTER the tab row */
+            border-bottom: 1px solid var(--border);
+            gap: 4px;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-3);
+            padding: 10px 32px;
+            /* bigger */
+            font-size: 14px;
+            /* larger text */
+            font-weight: 500;
+            cursor: pointer;
+            font-family: inherit;
+            transition: color 0.15s, border-color 0.15s;
+            margin-bottom: -1px;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-1);
         }
 
         .tab-active {
-            border-bottom: 2px solid #3b82f6;
-            color: #fff;
+            color: #fff !important;
+            border-bottom-color: var(--accent) !important;
         }
 
         .tab-inactive {
-            color: #64748b;
-            border-bottom: 2px solid transparent;
+            color: var(--text-3);
         }
 
-        ::-webkit-scrollbar {
-            width: 6px;
+        /* ── Tab panels ── */
+        .tab-content {
+            padding: 16px 24px 32px;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        /* Charts */
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+        }
+
+        .chart-card-label {
+            font-size: 12px;
+            color: var(--text-3);
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            margin-bottom: 10px;
+        }
+
+        /* Energy panel */
+        .energy-grid {
+            display: grid;
+            grid-template-columns: 220px 1fr;
+            gap: 16px;
+        }
+
+        @media (max-width: 720px) {
+            .energy-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .donut-wrap {
+            position: relative;
+            height: 200px;
+        }
+
+        .energy-total-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .energy-total-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .energy-total-lbl {
+            font-size: 11px;
+            color: var(--text-3);
+        }
+
+        #energy-legend {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .energy-leg-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .energy-leg-swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+
+        .energy-leg-val {
+            margin-left: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-2);
+        }
+
+        /* Heatmap */
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .heat-cell {
+            background: var(--bg-raised);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            transition: transform 0.15s;
+            cursor: default;
+        }
+
+        .heat-cell:hover {
+            transform: scale(1.02);
+        }
+
+        .heat-cell.temp-warn {
+            border-color: rgba(245, 158, 11, 0.4);
+        }
+
+        .heat-cell.temp-crit {
+            border-color: rgba(239, 68, 68, 0.5);
+        }
+
+        .heat-name {
+            font-size: 11px;
+            color: var(--text-2);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .heat-temp {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 17px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .heat-bar {
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .heat-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        .heatmap-legend {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+            color: var(--text-3);
+        }
+
+        .heatmap-gradient {
+            flex: 1;
             height: 6px;
+            border-radius: 3px;
+            background: linear-gradient(to right, #3b82f6, #f59e0b, #ef4444);
+        }
+
+        /* Detail table */
+        .table-wrap {
+            overflow-x: auto;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .detail-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .detail-table th {
+            background: var(--bg-raised);
+            color: var(--text-3);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            font-weight: 500;
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+
+        .detail-table td {
+            padding: 9px 14px;
+            border-bottom: 1px solid rgba(35, 43, 61, 0.6);
+            color: var(--text-2);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .detail-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .detail-table tr:hover td {
+            background: rgba(59, 130, 246, 0.04);
+        }
+
+        .motor-name {
+            font-weight: 500;
+            color: var(--text-1) !important;
+            font-family: 'DM Sans', sans-serif !important;
+            font-size: 13px !important;
+        }
+
+        .subsys-badge {
+            font-family: 'DM Sans', sans-serif;
+            font-size: 11px;
+            font-weight: 500;
+            padding: 3px 8px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+
+        .val-warn {
+            color: var(--amber) !important;
+        }
+
+        .val-crit {
+            color: var(--red) !important;
+        }
+
+        /* Empty states */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 24px;
+            color: var(--text-3);
+            text-align: center;
+        }
+
+        .empty-state svg {
+            margin-bottom: 12px;
+            opacity: 0.4;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
         }
 
         ::-webkit-scrollbar-track {
-            background: #0f1117;
+            background: var(--bg-base);
         }
 
         ::-webkit-scrollbar-thumb {
-            background: #2d3748;
+            background: var(--border-med);
             border-radius: 3px;
         }
     </style>
 </head>
 
-<body class="min-h-screen">
-    <div id="app" class="max-w-screen-xl mx-auto px-4 py-4">
+<body>
 
-        <!-- Header -->
-        <div class="flex items-center gap-3 mb-4">
-            <span class="text-2xl">⚡</span>
-            <h1 class="text-xl font-medium text-white">TechPower</h1>
-            <span id="sessionBadge" class="hidden text-xs px-2 py-0.5 rounded bg-blue-900 text-blue-200"></span>
-            <div class="ml-auto flex gap-2 items-center flex-wrap">
-                <span id="fileChips" class="flex gap-1 flex-wrap"></span>
-                <label
-                    class="cursor-pointer px-3 py-1 text-xs border border-slate-600 rounded hover:bg-slate-800 text-slate-300">
-                    <span>+ Add logs</span>
-                    <input type="file" multiple accept=".wpilog,.hoot" class="hidden" id="fileInput">
-                </label>
-                <!-- Example sessions -->
-                <div class="relative" id="sessionDropdown">
-                    <button onclick="toggleSessionMenu()"
-                        class="px-3 py-1 text-xs border border-slate-600 rounded hover:bg-slate-800 text-slate-300">Examples
-                        ▾</button>
-                    <div id="sessionMenu"
-                        class="hidden absolute right-0 top-8 bg-slate-800 border border-slate-700 rounded shadow-lg z-10 min-w-40">
-                        {% for s in config.example_logs.sessions %}
-                        <button onclick="loadSession('{{ s.id }}')"
-                            class="block w-full text-left px-4 py-2 text-sm hover:bg-slate-700 text-slate-200">{{ s.name
-                            }}</button>
-                        {% endfor %}
-                    </div>
-                </div>
+    <!-- App header -->
+    <header class="app-header">
+        <div class="app-logo">
+            <div class="logo-icon">⚡</div>
+            TechPower
+            <span class="version-badge">v1.2.0</span>
+        </div>
+        <div class="header-actions">
+            <div id="dash-header-actions" style="display:none">
+                <button class="btn-ghost" onclick="newSession()">← New Session</button>
             </div>
         </div>
+    </header>
 
-        <!-- Stat row -->
-        <div class="grid grid-cols-5 gap-2 mb-4" id="statRow">
-            <div class="card p-3">
-                <div class="text-xs text-slate-400 mb-1">Duration</div>
-                <div class="text-xl font-medium" id="statDuration">—</div>
+    <!-- ── Upload Panel ── -->
+    <div id="upload-panel">
+        <div class="upload-inner">
+            <div class="upload-headline">
+                <h1>FRC Power Analysis</h1>
+                <p>Drop your match logs to visualize battery, motor current, temperature and energy usage.</p>
             </div>
-            <div class="card p-3">
-                <div class="text-xs text-slate-400 mb-1">Subsystems</div>
-                <div class="text-xl font-medium" id="statSubsystems">—</div>
-            </div>
-            <div class="card p-3">
-                <div class="text-xs text-slate-400 mb-1">Total energy</div>
-                <div class="text-xl font-medium" id="statEnergy">—</div>
-            </div>
-            <div class="card p-3">
-                <div class="text-xs text-slate-400 mb-1">Peak power</div>
-                <div class="text-xl font-medium" id="statPeak">—</div>
-            </div>
-            <div class="card p-3 border-red-900">
-                <div class="text-xs text-slate-400 mb-1">Brownouts</div>
-                <div class="text-xl font-medium text-red-400" id="statBrownouts">—</div>
-            </div>
-        </div>
 
-        <!-- Tabs -->
-        <div class="flex border-b border-slate-700 mb-4 gap-1">
-            <button class="tab-active px-4 py-2 text-sm font-medium"
-                onclick="switchTab('summary',this)">Summary</button>
-            <button class="tab-inactive px-4 py-2 text-sm font-medium"
-                onclick="switchTab('timeline',this)">Timeline</button>
-            <button class="tab-inactive px-4 py-2 text-sm font-medium" onclick="switchTab('motors',this)">Motor
-                detail</button>
-            <button class="tab-inactive px-4 py-2 text-sm font-medium" onclick="switchTab('table',this)">Data
-                table</button>
-        </div>
-
-        <!-- TAB: SUMMARY -->
-        <div id="tab-summary">
-            <div class="grid grid-cols-3 gap-4 mb-4">
-                <div class="card p-4">
-                    <div class="text-sm text-slate-400 mb-2">Energy by subsystem (Wh)</div>
-                    <div style="height:160px;position:relative"><canvas id="cEnergy"></canvas></div>
+            <div id="drop-zone">
+                <div class="drop-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
                 </div>
-                <div class="card p-4">
-                    <div class="text-sm text-slate-400 mb-2">Peak burst power (W)</div>
-                    <div style="height:160px;position:relative"><canvas id="cPeak"></canvas></div>
+                <div class="drop-title">Drop log files here</div>
+                <div class="drop-sub">or click to browse</div>
+                <div class="file-types">
+                    <span class="file-type-tag">FRC_*.wpilog</span>
+                    <span class="file-type-tag">*_CC*.hoot.wpilog</span>
+                    <span class="file-type-tag">*_01*.hoot.wpilog</span>
                 </div>
-                <div class="card p-4">
-                    <div class="text-sm text-slate-400 mb-2">Avg power (W)</div>
-                    <div style="height:160px;position:relative"><canvas id="cAvg"></canvas></div>
-                </div>
-            </div>
-            <div class="card p-4 mb-4">
-                <div class="text-sm text-slate-400 mb-2">Per-motor energy (Wh)</div>
-                <div style="height:180px;position:relative"><canvas id="cMotors"></canvas></div>
-            </div>
-        </div>
-
-        <!-- TAB: TIMELINE -->
-        <div id="tab-timeline" class="hidden">
-            <!-- Match mode bar -->
-            <div class="card p-4 mb-3">
-                <div class="flex justify-between text-xs text-slate-400 mb-2">
-                    <span>Match mode</span>
-                    <div class="flex gap-3">
-                        <span class="flex items-center gap-1"><span
-                                class="inline-block w-3 h-2 rounded bg-green-500"></span>Auton</span>
-                        <span class="flex items-center gap-1"><span
-                                class="inline-block w-3 h-2 rounded bg-blue-500"></span>Teleop</span>
-                        <span class="flex items-center gap-1"><span
-                                class="inline-block w-3 h-2 rounded bg-gray-500"></span>Disabled</span>
-                        <span class="flex items-center gap-1"><span
-                                class="inline-block w-1 h-3 bg-red-500"></span>Brownout</span>
-                    </div>
-                </div>
-                <div id="modeBar" class="h-4 rounded overflow-hidden flex"></div>
-                <div id="brownoutTicks" class="flex gap-3 mt-2 flex-wrap"></div>
+                <input type="file" id="file-input" multiple accept=".wpilog" style="display:none">
             </div>
 
-            <!-- Subsystem selector -->
-            <div class="flex gap-2 mb-3 flex-wrap">
-                <button class="subsys-btn px-3 py-1 text-xs rounded border border-blue-700 bg-blue-900 text-blue-200"
-                    data-id="all" onclick="selectSubsys('all',this)">All subsystems</button>
-                <div id="subsysBtns"></div>
-            </div>
+            <div id="upload-status"></div>
+            <div id="upload-progress"></div>
+            <button class="btn-primary" id="analyze-btn"
+                onclick="uploadFiles(Array.from(document.getElementById('file-input').files))">Analyze</button>
 
-            <!-- Main timeline chart -->
-            <div class="card p-4 mb-3">
-                <div class="flex justify-between items-center mb-2">
-                    <div class="text-sm text-slate-400">Power over time</div>
-                    <span id="hoverLabel" class="text-xs text-slate-500">hover or click to inspect</span>
+            <div class="example-section">
+                <div class="example-label">Try an example</div>
+                <div class="example-btns">
+                    {% for session in example_sessions %}
+                    <button class="example-btn" onclick="loadExample('{{ session.id }}')">{{ session.name }}</button>
+                    {% endfor %}
                 </div>
-                <div id="tlLegend" class="flex gap-3 flex-wrap mb-2"></div>
-                <div style="height:220px;position:relative"><canvas id="cTimeline"></canvas></div>
-            </div>
-
-            <!-- Bottom 3-col snapshot -->
-            <div class="grid grid-cols-3 gap-3">
-                <div class="card p-3">
-                    <div
-                        class="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2 border-b border-slate-700 pb-1">
-                        Power (W)</div>
-                    <div id="snapPower" class="text-xs space-y-1"></div>
-                </div>
-                <div class="card p-3">
-                    <div
-                        class="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2 border-b border-slate-700 pb-1">
-                        Supply current (A)</div>
-                    <div id="snapSupply" class="text-xs space-y-1"></div>
-                </div>
-                <div class="card p-3">
-                    <div
-                        class="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2 border-b border-slate-700 pb-1">
-                        Stator current (A)</div>
-                    <div id="snapStator" class="text-xs space-y-1"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- TAB: MOTOR DETAIL -->
-        <div id="tab-motors" class="hidden">
-            <div class="flex gap-2 mb-3 flex-wrap">
-                <button
-                    class="motor-filter-btn px-3 py-1 text-xs rounded border border-blue-700 bg-blue-900 text-blue-200"
-                    data-filter="all" onclick="filterMotors('all',this)">All</button>
-                <div id="motorFilterBtns"></div>
-            </div>
-            <div class="grid grid-cols-2 gap-3" id="motorDetailGrid"></div>
-        </div>
-
-        <!-- TAB: DATA TABLE -->
-        <div id="tab-table" class="hidden">
-            <div class="card overflow-x-auto">
-                <table class="w-full text-xs">
-                    <thead>
-                        <tr class="border-b border-slate-700">
-                            <th class="text-left p-3 text-slate-400">Motor</th>
-                            <th class="text-left p-3 text-slate-400">Subsystem</th>
-                            <th class="text-right p-3 text-slate-400">Energy (Wh)</th>
-                            <th class="text-right p-3 text-slate-400">Avg power (W)</th>
-                            <th class="text-right p-3 text-slate-400">Peak power (W)</th>
-                            <th class="text-right p-3 text-slate-400">Avg supply (A)</th>
-                            <th class="text-right p-3 text-slate-400">Avg stator (A)</th>
-                            <th class="text-right p-3 text-slate-400">Max stator (A)</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tableBody"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Loading overlay -->
-        <div id="loadingOverlay"
-            class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
-            <div class="card p-6 text-center">
-                <div class="text-4xl mb-3 animate-pulse">⚡</div>
-                <div class="text-sm text-slate-300">Parsing logs...</div>
             </div>
         </div>
     </div>
 
+    <!-- ── Dashboard Panel ── -->
+    <div id="dashboard-panel">
+
+        <div class="dash-header">
+            <div class="match-info">
+                <h2 id="match-title">Match</h2>
+                <span id="match-meta"></span>
+            </div>
+            <button class="btn-ghost" onclick="newSession()">← New Session</button>
+        </div>
+
+        <div class="summary-cards-wrap">
+            <div class="summary-cards" id="summary-cards"></div>
+        </div>
+
+        <div class="timebar-section">
+            <div id="time-bar-container"></div>
+        </div>
+
+        <!-- Tabs — centered via CSS -->
+        <div class="tabs-section">
+            <div class="tabs">
+                <button class="tab-btn tab-active" data-tab="timeline">Timeline</button>
+                <button class="tab-btn tab-inactive" data-tab="energy">Energy</button>
+                <button class="tab-btn tab-inactive" data-tab="heatmap">Temperature</button>
+                <button class="tab-btn tab-inactive" data-tab="table">Motors</button>
+            </div>
+        </div>
+
+        <div class="tab-content">
+
+            <!-- TIMELINE TAB -->
+            <!-- Extra chart cards (stator current, supply current, temp) are injected
+             here by ensureTimelineCanvases() in JS before renderTimelineCharts() -->
+            <div class="tab-panel" data-panel="timeline" id="panel-timeline">
+                <div class="chart-card">
+                    <div class="chart-card-label">Battery Voltage</div>
+                    <div style="position:relative;height:200px">
+                        <canvas id="chart-voltage" role="img" aria-label="Battery voltage over match time"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <div class="chart-card-label">Battery Current</div>
+                    <div style="position:relative;height:200px">
+                        <canvas id="chart-current" role="img"
+                            aria-label="Battery current draw over match time"></canvas>
+                    </div>
+                </div>
+                <!-- chart-stator, chart-supply, chart-temp, live-table-card injected by JS -->
+            </div>
+
+            <!-- ENERGY TAB -->
+            <div class="tab-panel" data-panel="energy">
+                <div class="chart-card">
+                    <div class="chart-card-label">Energy by Subsystem</div>
+                    <div class="energy-grid">
+                        <div>
+                            <div class="donut-wrap">
+                                <canvas id="chart-energy-donut" role="img"
+                                    aria-label="Energy consumption by subsystem"></canvas>
+                                <div class="energy-total-center">
+                                    <div class="energy-total-val" id="total-wh-display">–</div>
+                                    <div class="energy-total-lbl">Total Wh</div>
+                                </div>
+                            </div>
+                            <div id="energy-legend"></div>
+                        </div>
+                        <div style="position:relative;height:240px">
+                            <canvas id="chart-energy-segments" role="img"
+                                aria-label="Energy consumption by match segment"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <!-- chart-energy-stator-v and chart-energy-supply injected by JS -->
+            </div>
+
+            <!-- HEATMAP TAB -->
+            <div class="tab-panel" data-panel="heatmap">
+                <div class="chart-card">
+                    <div class="chart-card-label">Motor Peak Temperature</div>
+                    <div id="heatmap-container">
+                        <div class="empty-state">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="1.5">
+                                <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
+                            </svg>
+                            <p>Temperature data requires hoot logs</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TABLE TAB -->
+            <div class="tab-panel" data-panel="table">
+                <div id="detail-table-container">
+                    <div class="empty-state">
+                        <p>No motor data available</p>
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- /tab-content -->
+    </div><!-- /dashboard-panel -->
+
     <script src="/static/js/techpower.js"></script>
+    <script>
+        // Keep dash-header-actions in sync with dashboard visibility
+        const _dashObserver = new MutationObserver(() => {
+            const visible = document.getElementById('dashboard-panel').style.display !== 'none';
+            document.getElementById('dash-header-actions').style.display = visible ? 'block' : 'none';
+        });
+        _dashObserver.observe(document.getElementById('dashboard-panel'), { attributes: true });
+    </script>
 </body>
 
 </html>
