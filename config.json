@@ -1,0 +1,65 @@
+{
+  "app": { "name": "TechPower", "version": "1.0.0" },
+
+  "log_sources": {
+    "wpilog": {
+      "extensions": [".wpilog"],
+      "keys": {
+        "battery_voltage":    "/Robot/SystemStats/BatteryVoltage",
+        "battery_current":    "/Robot/SystemStats/BatteryCurrent",
+        "brownout":           "/Robot/SystemStats/BrownedOut",
+        "enabled":            "DS:enabled",
+        "autonomous":         "DS:autonomous",
+        "pdp_channel_current":"/Robot/SystemStats/PowerDistribution/ChannelCurrent",
+        "pdp_voltage":        "/Robot/SystemStats/PowerDistribution/Voltage"
+      }
+    }
+  },
+
+  "motors": [
+    { "id": "fl_drive",  "name": "FL Drive",  "channel": 3,  "subsystem_id": "swerve" },
+    { "id": "fl_steer",  "name": "FL Steer",  "channel": 4,  "subsystem_id": "swerve" },
+    { "id": "fr_drive",  "name": "FR Drive",  "channel": 6,  "subsystem_id": "swerve" },
+    { "id": "fr_steer",  "name": "FR Steer",  "channel": 7,  "subsystem_id": "swerve" },
+    { "id": "bl_drive",  "name": "BL Drive",  "channel": 11, "subsystem_id": "swerve" },
+    { "id": "bl_steer",  "name": "BL Steer",  "channel": 8,  "subsystem_id": "swerve" },
+    { "id": "br_drive",  "name": "BR Drive",  "channel": 15, "subsystem_id": "swerve" },
+    { "id": "br_steer",  "name": "BR Steer",  "channel": 9,  "subsystem_id": "swerve" },
+    { "id": "mech1",     "name": "Mech Ch12", "channel": 12, "subsystem_id": "swerve" },
+    { "id": "mech2",     "name": "Mech Ch13", "channel": 13, "subsystem_id": "swerve" },
+    { "id": "mech3",     "name": "Mech Ch14", "channel": 14, "subsystem_id": "swerve" },
+    { "id": "mech4",     "name": "Mech Ch16", "channel": 16, "subsystem_id": "swerve" },
+    { "id": "mech5",     "name": "Mech Ch17", "channel": 17, "subsystem_id": "swerve" },
+    { "id": "mech6",     "name": "Mech Ch19", "channel": 19, "subsystem_id": "swerve" },
+    { "id": "shooter",   "name": "Shooter Flywheel", "channel": 20, "subsystem_id": "subsystems" },
+    { "id": "hopper_r",  "name": "Hopper Roller",    "channel": 21, "subsystem_id": "subsystems" },
+    { "id": "hopper_f",  "name": "Hopper Floor",     "channel": 22, "subsystem_id": "subsystems" },
+    { "id": "intake",    "name": "Intake/Climb",     "channel": 23, "subsystem_id": "subsystems" }
+  ],
+
+  "subsystems": [
+    { "id": "swerve",     "name": "Swerve Drivetrain",     "color": "#3b82f6" },
+    { "id": "subsystems", "name": "Subsystems (CANivore)", "color": "#f97316" }
+  ],
+
+  "energy_calculation": {
+    "wh_conversion": 3600
+  },
+
+  "timeline": {
+    "resample_hz": 50
+  },
+
+  "example_logs": {
+    "sessions": [
+      {
+        "id": "Q17", "name": "NYN2 Q17",
+        "wpilog": "assets/example-logs/Q17/FRC_20260407_183251_NYN2_Q17.wpilog"
+      },
+      {
+        "id": "E3", "name": "NYN2 E3",
+        "wpilog": "assets/example-logs/E3/FRC_20260408_183214_NYN2_E3.wpilog"
+      }
+    ]
+  }
+}

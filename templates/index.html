@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TechPower</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <style>
+        body {
+            background: #0f1117;
+            color: #e2e8f0;
+            font-family: system-ui, sans-serif;
+        }
+
+        .card {
+            background: #1a1f2e;
+            border: 1px solid #2d3748;
+            border-radius: 10px;
+        }
+
+        .tab-active {
+            border-bottom: 2px solid #3b82f6;
+            color: #fff;
+        }
+
+        .tab-inactive {
+            color: #64748b;
+            border-bottom: 2px solid transparent;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f1117;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #2d3748;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+
+<body class="min-h-screen">
+    <div id="app" class="max-w-screen-xl mx-auto px-4 py-4">
+
+        <!-- Header -->
+        <div class="flex items-center gap-3 mb-4">
+            <span class="text-2xl">⚡</span>
+            <h1 class="text-xl font-medium text-white">TechPower</h1>
+            <span id="sessionBadge" class="hidden text-xs px-2 py-0.5 rounded bg-blue-900 text-blue-200"></span>
+            <div class="ml-auto flex gap-2 items-center flex-wrap">
+                <span id="fileChips" class="flex gap-1 flex-wrap"></span>
+                <label
+                    class="cursor-pointer px-3 py-1 text-xs border border-slate-600 rounded hover:bg-slate-800 text-slate-300">
+                    <span>+ Add logs</span>
+                    <input type="file" multiple accept=".wpilog,.hoot" class="hidden" id="fileInput">
+                </label>
+                <!-- Example sessions -->
+                <div class="relative" id="sessionDropdown">
+                    <button onclick="toggleSessionMenu()"
+                        class="px-3 py-1 text-xs border border-slate-600 rounded hover:bg-slate-800 text-slate-300">Examples
+                        ▾</button>
+                    <div id="sessionMenu"
+                        class="hidden absolute right-0 top-8 bg-slate-800 border border-slate-700 rounded shadow-lg z-10 min-w-40">
+                        {% for s in config.example_logs.sessions %}
+                        <button onclick="loadSession('{{ s.id }}')"
+                            class="block w-full text-left px-4 py-2 text-sm hover:bg-slate-700 text-slate-200">{{ s.name
+                            }}</button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stat row -->
+        <div class="grid grid-cols-5 gap-2 mb-4" id="statRow">
+            <div class="card p-3">
+                <div class="text-xs text-slate-400 mb-1">Duration</div>
+                <div class="text-xl font-medium" id="statDuration">—</div>
+            </div>
+            <div class="card p-3">
+                <div class="text-xs text-slate-400 mb-1">Subsystems</div>
+                <div class="text-xl font-medium" id="statSubsystems">—</div>
+            </div>
+            <div class="card p-3">
+                <div class="text-xs text-slate-400 mb-1">Total energy</div>
+                <div class="text-xl font-medium" id="statEnergy">—</div>
+            </div>
+            <div class="card p-3">
+                <div class="text-xs text-slate-400 mb-1">Peak power</div>
+                <div class="text-xl font-medium" id="statPeak">—</div>
+            </div>
+            <div class="card p-3 border-red-900">
+                <div class="text-xs text-slate-400 mb-1">Brownouts</div>
+                <div class="text-xl font-medium text-red-400" id="statBrownouts">—</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex border-b border-slate-700 mb-4 gap-1">
+            <button class="tab-active px-4 py-2 text-sm font-medium"
+                onclick="switchTab('summary',this)">Summary</button>
+            <button class="tab-inactive px-4 py-2 text-sm font-medium"
+                onclick="switchTab('timeline',this)">Timeline</button>
+            <button class="tab-inactive px-4 py-2 text-sm font-medium" onclick="switchTab('motors',this)">Motor
+                detail</button>
+            <button class="tab-inactive px-4 py-2 text-sm font-medium" onclick="switchTab('table',this)">Data
+                table</button>
+        </div>
+
+        <!-- TAB: SUMMARY -->
+        <div id="tab-summary">
+            <div class="grid grid-cols-3 gap-4 mb-4">
+                <div class="card p-4">
+                    <div class="text-sm text-slate-400 mb-2">Energy by subsystem (Wh)</div>
+                    <div style="height:160px;position:relative"><canvas id="cEnergy"></canvas></div>
+                </div>
+                <div class="card p-4">
+                    <div class="text-sm text-slate-400 mb-2">Peak burst power (W)</div>
+                    <div style="height:160px;position:relative"><canvas id="cPeak"></canvas></div>
+                </div>
+                <div class="card p-4">
+                    <div class="text-sm text-slate-400 mb-2">Avg power (W)</div>
+                    <div style="height:160px;position:relative"><canvas id="cAvg"></canvas></div>
+                </div>
+            </div>
+            <div class="card p-4 mb-4">
+                <div class="text-sm text-slate-400 mb-2">Per-motor energy (Wh)</div>
+                <div style="height:180px;position:relative"><canvas id="cMotors"></canvas></div>
+            </div>
+        </div>
+
+        <!-- TAB: TIMELINE -->
+        <div id="tab-timeline" class="hidden">
+            <!-- Match mode bar -->
+            <div class="card p-4 mb-3">
+                <div class="flex justify-between text-xs text-slate-400 mb-2">
+                    <span>Match mode</span>
+                    <div class="flex gap-3">
+                        <span class="flex items-center gap-1"><span
+                                class="inline-block w-3 h-2 rounded bg-green-500"></span>Auton</span>
+                        <span class="flex items-center gap-1"><span
+                                class="inline-block w-3 h-2 rounded bg-blue-500"></span>Teleop</span>
+                        <span class="flex items-center gap-1"><span
+                                class="inline-block w-3 h-2 rounded bg-gray-500"></span>Disabled</span>
+                        <span class="flex items-center gap-1"><span
+                                class="inline-block w-1 h-3 bg-red-500"></span>Brownout</span>
+                    </div>
+                </div>
+                <div id="modeBar" class="h-4 rounded overflow-hidden flex"></div>
+                <div id="brownoutTicks" class="flex gap-3 mt-2 flex-wrap"></div>
+            </div>
+
+            <!-- Subsystem selector -->
+            <div class="flex gap-2 mb-3 flex-wrap">
+                <button class="subsys-btn px-3 py-1 text-xs rounded border border-blue-700 bg-blue-900 text-blue-200"
+                    data-id="all" onclick="selectSubsys('all',this)">All subsystems</button>
+                <div id="subsysBtns"></div>
+            </div>
+
+            <!-- Main timeline chart -->
+            <div class="card p-4 mb-3">
+                <div class="flex justify-between items-center mb-2">
+                    <div class="text-sm text-slate-400">Power over time</div>
+                    <span id="hoverLabel" class="text-xs text-slate-500">hover or click to inspect</span>
+                </div>
+                <div id="tlLegend" class="flex gap-3 flex-wrap mb-2"></div>
+                <div style="height:220px;position:relative"><canvas id="cTimeline"></canvas></div>
+            </div>
+
+            <!-- Bottom 3-col snapshot -->
+            <div class="grid grid-cols-3 gap-3">
+                <div class="card p-3">
+                    <div
+                        class="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2 border-b border-slate-700 pb-1">
+                        Power (W)</div>
+                    <div id="snapPower" class="text-xs space-y-1"></div>
+                </div>
+                <div class="card p-3">
+                    <div
+                        class="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2 border-b border-slate-700 pb-1">
+                        Supply current (A)</div>
+                    <div id="snapSupply" class="text-xs space-y-1"></div>
+                </div>
+                <div class="card p-3">
+                    <div
+                        class="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2 border-b border-slate-700 pb-1">
+                        Stator current (A)</div>
+                    <div id="snapStator" class="text-xs space-y-1"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: MOTOR DETAIL -->
+        <div id="tab-motors" class="hidden">
+            <div class="flex gap-2 mb-3 flex-wrap">
+                <button
+                    class="motor-filter-btn px-3 py-1 text-xs rounded border border-blue-700 bg-blue-900 text-blue-200"
+                    data-filter="all" onclick="filterMotors('all',this)">All</button>
+                <div id="motorFilterBtns"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-3" id="motorDetailGrid"></div>
+        </div>
+
+        <!-- TAB: DATA TABLE -->
+        <div id="tab-table" class="hidden">
+            <div class="card overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead>
+                        <tr class="border-b border-slate-700">
+                            <th class="text-left p-3 text-slate-400">Motor</th>
+                            <th class="text-left p-3 text-slate-400">Subsystem</th>
+                            <th class="text-right p-3 text-slate-400">Energy (Wh)</th>
+                            <th class="text-right p-3 text-slate-400">Avg power (W)</th>
+                            <th class="text-right p-3 text-slate-400">Peak power (W)</th>
+                            <th class="text-right p-3 text-slate-400">Avg supply (A)</th>
+                            <th class="text-right p-3 text-slate-400">Avg stator (A)</th>
+                            <th class="text-right p-3 text-slate-400">Max stator (A)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Loading overlay -->
+        <div id="loadingOverlay"
+            class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+            <div class="card p-6 text-center">
+                <div class="text-4xl mb-3 animate-pulse">⚡</div>
+                <div class="text-sm text-slate-300">Parsing logs...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/techpower.js"></script>
+</body>
+
+</html>
