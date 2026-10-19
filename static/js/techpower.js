@@ -1,728 +1,976 @@
-/* TechPower v1.2.0 */
+/* TechPower */
+'use strict';
+
+const MAX_COMPARE = 4;
+const WARN_TEMP = 70, CRIT_TEMP = 90;
+const MIN_ZOOM_S = 2;
+const ROLES = ['main', 'swerve', 'subsystems'];
+const HOOT_RE = /_([0-9A-F]{2})[0-9A-F]{30}_\d{4}-\d{2}-\d{2}_/i;  // mirrors app.py
+
+const $ = id => document.getElementById(id);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const fmt = (v, d = 1) => (v == null || !Number.isFinite(v)) ? '–' : v.toFixed(d);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const State = {
   session: null,
-  currentTime: 0,
+  t: 0,
   playing: false,
-  activeTab: 'timeline',
-  charts: {},
-  zoom: { xMin: 0, xMax: 1 },
+  speed: 1,
+  tab: 'timeline',
+  zoom: { min: 0, max: 1 },
+  zoomDirty: false,
+  charts: {},                         // canvas id → Chart
+  slots: new Array(MAX_COMPARE).fill(null),  // compared motor ids; index = color slot
+  liveRows: [],
+  liveIdx: -1,
+  files: {},                          // role → File
+  busy: false,
+  theme: null,
+  prefixMap: {},
 };
 
-const $ = id => document.getElementById(id);
-const $$ = sel => document.querySelectorAll(sel) || [];
-
-const COLORS = {
-  auto: '#f59e0b', teleop: '#3b82f6', disabled: '#374151',
-  brownout: '#ef4444', voltage: '#34d399', current: '#f97316',
-  stator: '#a78bfa', supply: '#f97316', temp: '#fb923c',
-  swerve: '#3b82f6', subsystems: '#f97316',
-};
-
-function hexToRgba(hex, a) {
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  return `rgba(${r},${g},${b},${a})`;
+function readTheme() {
+  const s = getComputedStyle(document.documentElement);
+  const v = n => s.getPropertyValue(n).trim();
+  return {
+    ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'), grid: v('--grid'),
+    surface: v('--surface'), rule: v('--rule'), critical: v('--critical'),
+    auto: v('--auto'), teleop: v('--teleop'),
+    series: [1, 2, 3, 4].map(i => v(`--series-${i}`)),
+  };
 }
 
-// ─── Upload / Drop zone ───────────────────────────────────────────────────────
-function initDropZone() {
-  const zone = $('drop-zone'), input = $('file-input');
-  if (!zone || !input) return;
-  zone.addEventListener('click', () => input.click());
-  input.addEventListener('change', e => handleFiles(e.target.files));
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
+// Subsystems take fixed slots so a bus keeps its color everywhere it appears.
+const SUBSYSTEM_SLOTS = [0, 2, 3, 1];
+const subsystemColor = idx => `var(--series-${SUBSYSTEM_SLOTS[idx % 4] + 1})`;
+const subsystemColorValue = idx => State.theme.series[SUBSYSTEM_SLOTS[idx % 4]];
+
+// ─── Upload ───────────────────────────────────────────────────────────────────
+function classify(name) {
+  const m = HOOT_RE.exec(name);
+  if (!m) return 'main';
+  return State.prefixMap[m[1].toUpperCase()] || 'unknown';
 }
 
-function handleFiles(files) {
-  if (!files.length) return;
-  const list = Array.from(files);
-  $('upload-status').innerHTML = list.map(f => `
-    <div class="file-chip">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-      </svg>${f.name}
-    </div>`).join('');
-  uploadFiles(list);
-}
-
-async function uploadFiles(files) {
-  const btn = $('analyze-btn'), prog = $('upload-progress');
-  btn.disabled = true; btn.textContent = 'Analyzing…';
-  prog.style.display = 'block';
-  const fd = new FormData();
-  files.forEach(f => fd.append('logs', f));
-  try {
-    const res = await fetch('/api/analyze', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    State.session = data;
-    renderDashboard(data);
-  } catch (err) {
-    showError(err.message || 'Upload failed');
-  } finally {
-    btn.disabled = false; btn.textContent = 'Analyze';
-    prog.style.display = 'none';
+function addFiles(list) {
+  const notes = [];
+  for (const f of list) {
+    if (!/\.wpilog$/i.test(f.name)) {
+      notes.push(`${f.name} isn't a .wpilog file. Convert .hoot logs to .wpilog in Phoenix Tuner first.`);
+      continue;
+    }
+    const role = classify(f.name);
+    if (role === 'unknown') { notes.push(`${f.name} doesn't match a known CANivore.`); continue; }
+    State.files[role] = f;
   }
+  renderSlots();
+  setStatus(notes, notes.length > 0);
+  if (!notes.length && ROLES.every(r => State.files[r])) analyzeFiles();
 }
 
-async function loadExample(sessionId) {
-  const btn = $('analyze-btn'), prog = $('upload-progress');
-  btn.disabled = true; prog.style.display = 'block';
-  showUploadState('loading', `Loading ${sessionId}…`);
+function renderSlots() {
+  document.querySelectorAll('.slot').forEach(li => {
+    const f = State.files[li.dataset.role];
+    li.classList.toggle('filled', !!f);
+    li.querySelector('.slot-file').textContent = f ? f.name : '';
+  });
+  $('clear-btn').hidden = !Object.keys(State.files).length;
+  setBusyUI(State.busy);
+}
+
+function clearFiles() {
+  State.files = {};
+  $('file-input').value = '';
+  renderSlots();
+  setStatus('');
+}
+
+function setStatus(msg, isError = false, busy = false) {
+  const el = $('upload-status');
+  const items = (Array.isArray(msg) ? msg : [msg]).filter(Boolean);
+  el.classList.toggle('error', isError);
+  el.setAttribute('role', isError ? 'alert' : 'status');
+  el.innerHTML = items.length > 1
+    ? `<ul>${items.map(m => `<li>${esc(m)}</li>`).join('')}</ul>`
+    : esc(items[0] || '');
+  if (busy) el.insertAdjacentHTML('beforeend', '<div class="busy-bar"></div>');
+}
+
+function setBusyUI(busy) {
+  const btn = $('analyze-btn');
+  btn.disabled = busy || !State.files.main;
+  btn.textContent = busy ? 'Analyzing…' : 'Analyze match';
+  document.querySelectorAll('.example-btn').forEach(b => { b.disabled = busy; });
+}
+
+function analyzeFiles() {
+  if (!State.files.main) { setStatus('Add the robot log (FRC_*.wpilog) first.', true); return; }
+  const fd = new FormData();
+  Object.values(State.files).forEach(f => fd.append('logs', f));
+  history.replaceState(null, '', location.pathname);
+  requestAnalysis('/api/analyze', { method: 'POST', body: fd },
+    'Analyzing. Large hoot logs take a few seconds the first time.');
+}
+
+function loadExample(id) {
+  if (new URLSearchParams(location.hash.slice(1)).get('example') !== id) {
+    history.replaceState(null, '', `#example=${encodeURIComponent(id)}`);
+  }
+  requestAnalysis(`/api/example/${encodeURIComponent(id)}`, {}, 'Opening example match…');
+}
+
+async function requestAnalysis(url, options, label) {
+  if (State.busy) return;
+  State.busy = true;
+  setBusyUI(true);
+  setStatus(label, false, true);
   try {
-    const res = await fetch(`/api/example/${sessionId}`);
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    State.session = data;
-    renderDashboard(data);
+    const res = await fetch(url, options);
+    let data;
+    try { data = await res.json(); } catch { throw new Error(`Server error ${res.status}. Check the terminal running app.py.`); }
+    if (!res.ok) throw new Error(data.error || `Server error ${res.status}.`);
+    setStatus('');
+    showDashboard(data);
   } catch (err) {
-    showError(err.message || 'Failed to load example');
+    const offline = err instanceof TypeError;
+    setStatus(offline ? "Can't reach the TechPower server. Is app.py still running?" : err.message, true);
   } finally {
-    btn.disabled = false; prog.style.display = 'none';
+    State.busy = false;
+    setBusyUI(false);
   }
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function renderDashboard(data) {
-  $('upload-panel').style.display    = 'none';
-  $('dashboard-panel').style.display = 'block';
-  $('match-title').textContent = data.match_name || 'Match';
-  $('match-meta').textContent  = `${data.duration?.toFixed(1) ?? '–'}s · ${data.match_segments?.length ?? 0} segments`;
+function prepare(d) {
+  const tl = d.timeline, n = tl.time.length;
+  d.duration = Math.max(d.duration || 0, 0.001);
+  d.dt = n > 1 ? tl.time[1] - tl.time[0] : 1;
+  d.motorById = Object.fromEntries(d.motors.map(m => [m.id, m]));
+  d.subsystemIndex = Object.fromEntries((d.subsystems || []).map((s, i) => [s.id, i]));
+  d.hasMotorData = d.motors.some(m => m.has_data);
 
-  const dha = $('dash-header-actions');
-  if (dha) dha.style.display = 'block';
-
-  renderSummaryCards(data);
-  renderTimeBar(data);
-
-  // Show all panels briefly so Chart.js can measure canvas sizes
-  $$('.tab-panel').forEach(p => { p.style.display = 'block'; });
-
-  ensureTimelineCanvases();
-  ensureEnergyCanvases();
-  renderTimelineCharts(data);
-  renderEnergyPanel(data);
-  renderHeatmap(data);
-  renderDetailTable(data);
-
-  // Patch donut total
-  const totalEl = $('total-wh-display');
-  if (totalEl) {
-    const subsysSum = Object.values(data.energy_by_subsystem || {}).reduce((a,b) => a+b, 0);
-    totalEl.textContent = subsysSum > 0 ? subsysSum.toFixed(1) : (data.total_energy_wh?.toFixed(1) ?? '–');
+  // Summed supply current per bus (null where no motor on that bus has data)
+  d.busTotals = {};
+  const sup = tl.supply_current_by_motor || {};
+  for (const m of d.motors) {
+    const s = sup[m.id];
+    if (!s) continue;
+    const acc = d.busTotals[m.subsystem_id] ||= new Array(n).fill(null);
+    for (let i = 0; i < n; i++) if (s[i] != null) acc[i] = (acc[i] ?? 0) + s[i];
   }
-
-  switchTab('timeline');
+  return d;
 }
 
-// ─── Summary cards ────────────────────────────────────────────────────────────
-function renderSummaryCards(data) {
-  const subsysTotal = Object.values(data.energy_by_subsystem || {}).reduce((a,b) => a+b, 0);
-  const cards = [
-    { label: 'Peak Voltage', value: (data.peak_voltage?.toFixed(2) ?? '–') + ' V' },
-    { label: 'Min Voltage',  value: (data.min_voltage?.toFixed(2)  ?? '–') + ' V' },
-    { label: 'Total Energy', value: ((subsysTotal || data.total_energy_wh) ?? 0).toFixed(1) + ' Wh' },
-    { label: 'Brownouts',    value: data.brownout_count ?? 0, warn: (data.brownout_count ?? 0) > 0 },
-    { label: 'Peak Current', value: (data.peak_current?.toFixed(1) ?? '–') + ' A' },
-    { label: 'Avg Current',  value: (data.avg_current?.toFixed(1)  ?? '–') + ' A' },
+function showDashboard(data) {
+  teardownCharts();
+  State.session = prepare(data);
+  State.t = 0;
+  State.zoom = { min: 0, max: data.duration };
+  State.liveIdx = -1;
+  State.slots = defaultSlots(data);
+
+  $('upload-view').hidden = true;
+  $('dashboard-view').hidden = false;
+  document.title = `${data.match_name} – TechPower`;
+
+  renderHeader(data);
+  renderReadouts(data);
+  renderScrubber(data);
+  renderLiveTable(data);
+  renderEnergy(data);
+  renderTemperature(data);
+  renderBrownouts(data);
+  renderMotorTable(data);
+  const tab = new URLSearchParams(location.hash.slice(1)).get('tab');
+  switchTab(document.querySelector(`.tab[data-tab="${CSS.escape(tab || '')}"]`) ? tab : 'timeline');
+  seek(0);
+  window.scrollTo(0, 0);
+}
+
+// Busiest motor on each bus first, then fill by energy, so every bus is represented.
+function defaultSlots(d) {
+  const ranked = d.motors.filter(m => m.has_data)
+    .sort((a, b) => (b.energy_wh ?? -Infinity) - (a.energy_wh ?? -Infinity));
+  const picks = [];
+  for (const m of ranked) if (!picks.some(p => p.subsystem_id === m.subsystem_id)) picks.push(m);
+  for (const m of ranked) if (!picks.includes(m)) picks.push(m);
+  const slots = new Array(MAX_COMPARE).fill(null);
+  picks.slice(0, MAX_COMPARE).forEach((m, i) => { slots[i] = m.id; });
+  return slots;
+}
+
+function newSession() {
+  togglePlay(false);
+  teardownCharts();
+  State.session = null;
+  history.replaceState(null, '', location.pathname);
+  document.title = 'TechPower';
+  $('dashboard-view').hidden = true;
+  $('upload-view').hidden = false;
+  clearFiles();
+}
+
+function renderHeader(d) {
+  $('match-title').textContent = d.match_name || 'Match';
+  const phases = d.match_segments.filter(s => s.type !== 'disabled')
+    .map(s => `${s.type === 'auto' ? 'Auto' : 'Teleop'} ${s.start.toFixed(0)}–${s.end.toFixed(0)} s`);
+  $('match-meta').textContent = phases.length
+    ? phases.join(', ')
+    : 'Robot was never enabled in this log.';
+
+  const w = $('warnings');
+  w.hidden = !d.warnings?.length;
+  w.innerHTML = (d.warnings || []).map(m => `<li>${esc(m)}</li>`).join('');
+}
+
+function renderReadouts(d) {
+  const lowV = d.min_voltage;
+  const items = [
+    { label: 'Lowest voltage', value: fmt(lowV, 2), unit: 'V', alarm: lowV != null && lowV < 7 },
+    { label: 'Brownouts', value: d.brownout_count ?? 0, alarm: d.brownout_count > 0, brownout: d.brownout_count > 0 },
+    { label: `Under ${d.thresholds.sag_voltage} V`, value: fmt(d.sag_seconds, 1), unit: 's' },
+    { label: 'Energy used', value: fmt(d.total_energy_wh, 1), unit: 'Wh' },
+    { label: 'Charge used', value: fmt(d.charge_ah, 2), unit: 'Ah' },
+    { label: 'Peak draw', value: fmt(d.peak_current, 0), unit: 'A' },
+    { label: 'Average draw', value: fmt(d.avg_current, 1), unit: 'A' },
+    { label: 'Battery resistance', value: fmt(d.battery?.resistance_mohm, 1), unit: 'mΩ' },
   ];
-  $('summary-cards').innerHTML = cards.map(c => `
-    <div class="summary-card ${c.warn ? 'card-warn' : ''}">
-      <div class="card-label">${c.label}</div>
-      <div class="card-value">${c.value}</div>
+  $('readouts').innerHTML = items.map(c => `
+    <div class="readout${c.alarm ? ' alarm' : ''}">
+      <dt>${c.label}</dt>
+      <dd>${c.brownout
+        ? `<button class="link-num" id="next-brownout" title="Jump to the next brownout">${c.value}</button>`
+        : c.value}${c.unit ? `<small>${c.unit}</small>` : ''}</dd>
     </div>`).join('');
+  $('next-brownout')?.addEventListener('click', jumpToNextBrownout);
 }
 
-// ─── Time Bar ─────────────────────────────────────────────────────────────────
-function renderTimeBar(data) {
-  const container = $('time-bar-container');
-  const duration  = data.duration || 1;
-  const segments  = data.match_segments || [];
-  const brownouts = data.brownout_events || [];
-
-  const trackInner = segments.map(seg => {
-    const left  = (seg.start / duration * 100).toFixed(3);
-    const width = ((seg.end - seg.start) / duration * 100).toFixed(3);
-    return `<div class="seg-block seg-${seg.type}" style="left:${left}%;width:${width}%"
-              title="${seg.type} ${seg.start.toFixed(1)}s–${seg.end.toFixed(1)}s"></div>`;
-  }).join('');
-
-  const brownoutTicks = brownouts.map(ev => {
-    const left = (ev.time / duration * 100).toFixed(3);
-    return `<div class="brownout-tick" style="left:${left}%" title="Brownout @ ${ev.time.toFixed(2)}s"></div>`;
-  }).join('');
-
-  container.innerHTML = `
-    <div class="timebar-wrap">
-      <div class="timebar-labels">${buildTimeMarkers(duration)}</div>
-      <div class="timebar-track" id="timebar-track">
-        <div class="seg-track">${trackInner}</div>
-        <div class="brownout-layer">${brownoutTicks}</div>
-        <div class="timebar-zoom-overlay" id="timebar-zoom-overlay"></div>
-        <div class="timebar-cursor" id="timebar-cursor" style="left:0%"></div>
-      </div>
-      <div class="timebar-controls">
-        <button class="tb-btn" id="play-btn" onclick="togglePlay()">▶</button>
-        <span class="tb-time" id="tb-time">0.00 s</span>
-        <span class="tb-duration">/ ${duration.toFixed(2)} s</span>
-        <button class="tb-btn" onclick="resetZoom()" title="Reset zoom">⊠</button>
-        <div class="tb-legend">
-          <span class="leg-item"><span class="leg-swatch leg-auto"></span>Auto</span>
-          <span class="leg-item"><span class="leg-swatch leg-teleop"></span>Teleop</span>
-          <span class="leg-item"><span class="leg-swatch leg-disabled"></span>Disabled</span>
-          <span class="leg-item"><span class="leg-swatch leg-brownout"></span>Brownout</span>
-          <span class="leg-item" style="color:var(--text-3);font-size:10px">Scroll=zoom · right-drag=pan · dbl-click=reset</span>
-        </div>
-      </div>
-    </div>`;
-
-  State.zoom = { xMin: 0, xMax: duration };
-
-  const track = $('timebar-track');
-  let dragging = false;
-  const seekFrac = e => {
-    const r = track.getBoundingClientRect();
-    seekTo(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * duration);
-  };
-  track.addEventListener('mousedown', e => { if (e.button === 0) { dragging = true; seekFrac(e); } });
-  document.addEventListener('mousemove', e => { if (dragging) seekFrac(e); });
-  document.addEventListener('mouseup',   e => { if (e.button === 0) dragging = false; });
-  track.addEventListener('touchstart', e => seekFrac(e.touches[0]), { passive: true });
-  track.addEventListener('touchmove',  e => seekFrac(e.touches[0]), { passive: true });
-
-  // Wheel zoom on timebar
-  track.addEventListener('wheel', e => {
-    e.preventDefault();
-    const r = track.getBoundingClientRect();
-    zoomAround((e.clientX - r.left) / r.width, e.deltaY > 0 ? 1.25 : 0.8, duration);
-  }, { passive: false });
-
-  // Double-click = reset zoom
-  track.addEventListener('dblclick', () => resetZoom());
-
-  // Right-drag = pan
-  let panStart = null, panXMin0 = null;
-  track.addEventListener('mousedown', e => {
-    if (e.button === 2) { e.preventDefault(); panStart = e.clientX; panXMin0 = State.zoom.xMin; }
-  });
-  document.addEventListener('mousemove', e => {
-    if (panStart === null) return;
-    const r = track.getBoundingClientRect();
-    const dx = (e.clientX - panStart) / r.width * duration;
-    const span = State.zoom.xMax - State.zoom.xMin;
-    let lo = panXMin0 - dx, hi = lo + span;
-    if (lo < 0)        { lo = 0; hi = span; }
-    if (hi > duration) { hi = duration; lo = duration - span; }
-    applyZoom(lo, hi);
-  });
-  document.addEventListener('mouseup', e => { if (e.button === 2) panStart = null; });
-  track.addEventListener('contextmenu', e => e.preventDefault());
+function jumpToNextBrownout() {
+  const events = State.session.brownout_events;
+  const next = events.find(e => e.time > State.t + 0.05) || events[0];
+  if (!next) return;
+  const span = State.zoom.max - State.zoom.min;
+  if (next.time < State.zoom.min || next.time > State.zoom.max) setZoom(next.time - span / 2, next.time + span / 2);
+  seek(next.time);
 }
 
-function buildTimeMarkers(duration) {
-  const step = duration > 120 ? 30 : duration > 60 ? 15 : duration > 30 ? 10 : 5;
-  let html = '';
-  for (let t = 0; t <= duration; t += step)
-    html += `<div class="tb-marker" style="left:${(t/duration*100).toFixed(2)}%">${t}s</div>`;
-  return html;
+// ─── Scrubber ─────────────────────────────────────────────────────────────────
+function renderScrubber(d) {
+  const pct = t => (t / d.duration * 100).toFixed(3);
+  $('track-segments').innerHTML = d.match_segments.map(s =>
+    `<div class="seg seg-${s.type}" style="left:${pct(s.start)}%;width:${pct(s.end - s.start)}%"></div>`).join('');
+  $('track-brownouts').innerHTML = d.brownout_events.map(e =>
+    `<div class="brownout-tick" style="left:${pct(e.time)}%"></div>`).join('');
+
+  const step = [5, 10, 15, 30, 60, 120].find(s => d.duration / s <= 12) || 300;
+  let ticks = '';
+  for (let t = 0; t <= d.duration - step * 0.4; t += step) ticks += `<span style="left:${pct(t)}%">${t} s</span>`;
+  $('ticks').innerHTML = ticks;
+  $('track').setAttribute('aria-valuemax', d.duration.toFixed(1));
 }
 
-function seekTo(t) {
-  const duration = State.session?.duration || 1;
-  State.currentTime = Math.max(0, Math.min(duration, t));
-  const pct = (State.currentTime / duration * 100).toFixed(3);
-  const cursor = $('timebar-cursor'), tbTime = $('tb-time');
-  if (cursor) cursor.style.left = pct + '%';
-  if (tbTime) tbTime.textContent = State.currentTime.toFixed(2) + ' s';
-  updateChartCrosshairs();
-  updateLiveTable(State.currentTime);
+function phaseAt(t) {
+  const s = State.session.match_segments.find(s => t >= s.start && t <= s.end);
+  return s ? s.type : 'disabled';
 }
 
-function togglePlay() {
-  State.playing = !State.playing;
-  const btn = $('play-btn');
-  if (!btn) return;
-  btn.textContent = State.playing ? '⏸' : '▶';
-  if (State.playing) {
-    const duration = State.session?.duration || 1;
-    let last = null;
-    function tick(ts) {
-      if (!State.playing) return;
-      if (last !== null) {
-        if (State.currentTime >= duration) { seekTo(0); State.playing = false; btn.textContent = '▶'; return; }
-        seekTo(State.currentTime + (ts - last) / 1000);
-      }
-      last = ts;
-      requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
+function seek(t) {
+  if (!State.session) return;
+  State.t = clamp(t, 0, State.session.duration);
+  queueFrame();
+}
+
+function setZoom(min, max) {
+  const dur = State.session.duration;
+  const span = clamp(max - min, Math.min(MIN_ZOOM_S, dur), dur);
+  min = clamp((min + max) / 2 - span / 2, 0, dur - span);
+  State.zoom = { min, max: min + span };
+  State.zoomDirty = true;
+  queueFrame();
+}
+
+function zoomAt(pivot, factor) {
+  const { min, max } = State.zoom;
+  const span = max - min;
+  const next = clamp(span * factor, MIN_ZOOM_S, State.session.duration);
+  const lo = pivot - (pivot - min) * next / span;
+  setZoom(lo, lo + next);
+}
+
+function panBy(seconds) {
+  setZoom(State.zoom.min + seconds, State.zoom.max + seconds);
+}
+
+const resetZoom = () => setZoom(0, State.session.duration);
+
+// Zoom around the cursor when it's in view, otherwise around the middle of the view.
+function zoomStep(factor) {
+  const { min, max } = State.zoom;
+  zoomAt(State.t >= min && State.t <= max ? State.t : (min + max) / 2, factor);
+}
+
+// All visual updates for cursor and zoom happen here, at most once per frame.
+let frameQueued = false;
+function queueFrame() {
+  if (frameQueued) return;
+  frameQueued = true;
+  requestAnimationFrame(drawFrame);
+}
+
+function drawFrame() {
+  frameQueued = false;
+  const d = State.session;
+  if (!d) return;
+  const pct = v => `${(v / d.duration * 100).toFixed(3)}%`;
+
+  $('track-cursor').style.left = pct(State.t);
+  $('track').setAttribute('aria-valuenow', State.t.toFixed(1));
+  $('clock').innerHTML = `${State.t.toFixed(2)} <small>/ ${d.duration.toFixed(0)} s</small>`;
+  const phase = phaseAt(State.t);
+  const pill = $('phase-pill');
+  pill.dataset.phase = phase;
+  pill.textContent = phase[0].toUpperCase() + phase.slice(1);
+
+  const zoomed = State.zoom.min > 0.001 || State.zoom.max < d.duration - 0.001;
+  const win = $('zoom-window');
+  win.hidden = !zoomed;
+  win.style.left = pct(State.zoom.min);
+  win.style.width = pct(State.zoom.max - State.zoom.min);
+  $('reset-zoom-btn').hidden = !zoomed;
+
+  if (State.tab === 'timeline') {
+    if (State.zoomDirty) applyZoomToCharts();   // cursors get placed by the afterRender hook
+    else Object.values(State.charts).forEach(placeCursor);
+    updateLive();
   }
 }
 
-// ─── Zoom ─────────────────────────────────────────────────────────────────────
-function zoomAround(frac, factor, duration) {
-  duration = duration || State.session?.duration || 1;
-  const { xMin, xMax } = State.zoom;
-  const span = xMax - xMin;
-  const pivot = xMin + frac * span;
-  const newSpan = Math.min(duration, Math.max(2, span * factor));
-  let lo = pivot - frac * newSpan, hi = lo + newSpan;
-  if (lo < 0)        { lo = 0; hi = newSpan; }
-  if (hi > duration) { hi = duration; lo = duration - newSpan; }
-  applyZoom(lo, hi);
-}
-
-function applyZoom(xMin, xMax) {
-  State.zoom.xMin = xMin;
-  State.zoom.xMax = xMax;
-  Object.values(State.charts).forEach(c => {
-    if (!c?.options?.scales?.x) return;
-    c.options.scales.x.min = xMin;
-    c.options.scales.x.max = xMax;
+function applyZoomToCharts() {
+  State.zoomDirty = false;
+  for (const c of Object.values(State.charts)) {
+    c.options.scales.x.min = State.zoom.min;
+    c.options.scales.x.max = State.zoom.max;
     c.update('none');
-  });
-  const duration = State.session?.duration || 1;
-  const overlay = $('timebar-zoom-overlay');
-  if (overlay) {
-    overlay.style.left  = (xMin / duration * 100).toFixed(2) + '%';
-    overlay.style.right = ((duration - xMax) / duration * 100).toFixed(2) + '%';
   }
 }
 
-function resetZoom() {
-  const duration = State.session?.duration || 1;
-  applyZoom(0, duration);
+// ─── Playback ─────────────────────────────────────────────────────────────────
+let lastTick = null;
+function togglePlay(force) {
+  State.playing = force ?? !State.playing;
+  const btn = $('play-btn');
+  btn.setAttribute('aria-label', State.playing ? 'Pause' : 'Play');
+  $('play-icon').innerHTML = State.playing
+    ? '<path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/>'
+    : '<path d="M4 2.5v11l9-5.5z"/>';
+  if (!State.playing || !State.session) return;
+  if (State.t >= State.session.duration) State.t = 0;
+  lastTick = null;
+  requestAnimationFrame(playTick);
 }
 
-// ─── Timeline Charts ──────────────────────────────────────────────────────────
-function ensureTimelineCanvases() {
-  const panel = $('panel-timeline');
-  if (!panel) return;
-  [
-    { id: 'chart-stator', label: 'Stator Current (All Motors)' },
-    { id: 'chart-supply', label: 'Supply Current (All Motors)' },
-    { id: 'chart-temp',   label: 'Motor Temperature' },
-  ].forEach(({ id, label }) => {
-    if (!$(id)) {
-      const card = document.createElement('div');
-      card.className = 'chart-card';
-      card.innerHTML = `<div class="chart-card-label">${label}</div>
-        <div style="position:relative;height:200px"><canvas id="${id}"></canvas></div>`;
-      panel.appendChild(card);
+function playTick(ts) {
+  if (!State.playing || !State.session) return;
+  if (lastTick !== null) {
+    const t = State.t + (ts - lastTick) / 1000 * State.speed;
+    if (t >= State.session.duration) { seek(State.session.duration); togglePlay(false); return; }
+    seek(t);
+    const { min, max } = State.zoom;
+    if (t > max || t < min) setZoom(t - (max - min) * 0.1, t + (max - min) * 0.9);
+  }
+  lastTick = ts;
+  requestAnimationFrame(playTick);
+}
+
+function cycleSpeed() {
+  const speeds = [1, 2, 4, 0.5];
+  State.speed = speeds[(speeds.indexOf(State.speed) + 1) % speeds.length];
+  $('speed-btn').textContent = `${State.speed}×`;
+}
+
+// ─── Charts ───────────────────────────────────────────────────────────────────
+const pointCache = new WeakMap();
+function points(arr) {
+  let pts = pointCache.get(arr);
+  if (!pts) {
+    const time = State.session.timeline.time;
+    pts = arr.map((y, i) => ({ x: time[i], y }));
+    pointCache.set(arr, pts);
+  }
+  return pts;
+}
+
+// Phase shading and brownout lines behind the data.
+const bandsPlugin = {
+  id: 'bands',
+  beforeDatasetsDraw(chart) {
+    const d = State.session, th = State.theme;
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    if (!a || !d) return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(a.left, a.top, a.width, a.height); ctx.clip();
+    for (const s of d.match_segments) {
+      if (s.type === 'disabled') continue;
+      const x0 = x.getPixelForValue(s.start), x1 = x.getPixelForValue(s.end);
+      ctx.fillStyle = th[s.type];
+      ctx.fillRect(x0, a.top, x1 - x0, a.height);
     }
-  });
-  // Live table card
-  if (!$('live-table-card')) {
-    const card = document.createElement('div');
-    card.className = 'chart-card'; card.id = 'live-table-card';
-    card.innerHTML = `<div class="chart-card-label">Live Values at Cursor</div>
-      <div class="table-wrap">
-        <table class="detail-table" id="live-table">
-          <thead><tr>
-            <th>Motor</th><th>Battery V</th><th>Battery A</th>
-            <th>Stator A</th><th>Supply A</th><th>Temp °C</th>
-          </tr></thead>
-          <tbody id="live-table-body"></tbody>
-        </table>
-      </div>`;
-    panel.appendChild(card);
-  }
-}
-
-function renderTimelineCharts(data) {
-  const tl    = data.timeline || {};
-  const times  = tl.time || [];
-  if (!times.length) return;
-
-  ['chart-voltage','chart-current','chart-stator','chart-supply','chart-temp'].forEach(id => {
-    if (State.charts[id]) { State.charts[id].destroy(); delete State.charts[id]; }
-  });
-
-  const segs  = data.match_segments  || [];
-  const bouts = data.brownout_events || [];
-
-  if (tl.battery_voltage)
-    State.charts['chart-voltage'] = buildTimeChart('chart-voltage', times,
-      [{ label: 'Battery Voltage (V)', data: tl.battery_voltage, color: COLORS.voltage }],
-      { yLabel: 'Volts', segments: segs, brownouts: bouts,
-        yMin: Math.min(...tl.battery_voltage) - 0.5,
-        yMax: Math.max(...tl.battery_voltage) + 0.5 });
-
-  if (tl.battery_current)
-    State.charts['chart-current'] = buildTimeChart('chart-current', times,
-      [{ label: 'Battery Current (A)', data: tl.battery_current, color: COLORS.current }],
-      { yLabel: 'Amps', segments: segs, brownouts: bouts });
-
-  if (tl.stator_current_by_motor) {
-    const mids = Object.keys(tl.stator_current_by_motor);
-    const total = times.map((_, i) => mids.reduce((s,m) => s + Math.abs(tl.stator_current_by_motor[m][i] ?? 0), 0));
-    const ds = [{ label: 'Total Stator (A)', data: total, color: COLORS.stator }];
-    mids.forEach(mid => {
-      const motor = (data.motors||[]).find(m => m.id === mid);
-      ds.push({ label: motor?.name ?? mid, data: tl.stator_current_by_motor[mid], color: motor?.color ?? '#888', dashed: true });
-    });
-    State.charts['chart-stator'] = buildTimeChart('chart-stator', times, ds,
-      { yLabel: 'Amps', segments: segs, brownouts: bouts });
-  }
-
-  if (tl.supply_current_by_motor) {
-    const mids = Object.keys(tl.supply_current_by_motor);
-    const total = times.map((_, i) => mids.reduce((s,m) => s + Math.abs(tl.supply_current_by_motor[m][i] ?? 0), 0));
-    const ds = [{ label: 'Total Supply (A)', data: total, color: COLORS.supply }];
-    mids.forEach(mid => {
-      const motor = (data.motors||[]).find(m => m.id === mid);
-      ds.push({ label: motor?.name ?? mid, data: tl.supply_current_by_motor[mid], color: motor?.color ?? '#888', dashed: true });
-    });
-    State.charts['chart-supply'] = buildTimeChart('chart-supply', times, ds,
-      { yLabel: 'Amps', segments: segs, brownouts: bouts });
-  }
-
-  if (tl.temp_by_motor) {
-    const ds = Object.keys(tl.temp_by_motor).map(mid => {
-      const motor = (data.motors||[]).find(m => m.id === mid);
-      return { label: motor?.name ?? mid, data: tl.temp_by_motor[mid], color: motor?.color ?? '#888' };
-    });
-    if (ds.length)
-      State.charts['chart-temp'] = buildTimeChart('chart-temp', times, ds,
-        { yLabel: '°C', segments: segs, brownouts: bouts, yMin: 0 });
-  }
-
-  updateLiveTable(0);
-}
-
-// ─── Live table ───────────────────────────────────────────────────────────────
-function lerp(times, values, t) {
-  if (!times?.length || !values?.length) return null;
-  if (t <= times[0]) return values[0];
-  if (t >= times[times.length-1]) return values[times.length-1];
-  let lo = 0, hi = times.length - 1;
-  while (hi - lo > 1) { const mid = (lo+hi)>>1; if (times[mid] <= t) lo = mid; else hi = mid; }
-  return values[lo] + (t - times[lo]) / (times[hi] - times[lo]) * (values[hi] - values[lo]);
-}
-
-function updateLiveTable(t) {
-  const body = $('live-table-body');
-  if (!body || !State.session) return;
-  const tl     = State.session.timeline || {};
-  const times  = tl.time || [];
-  const motors = State.session.motors   || [];
-  if (!times.length || !motors.length) return;
-
-  const battV = lerp(times, tl.battery_voltage, t);
-  const battA = lerp(times, tl.battery_current, t);
-  const fmt = (v, d=1) => v != null ? v.toFixed(d) : '–';
-
-  body.innerHTML = motors.map(m => {
-    const stator = lerp(times, tl.stator_current_by_motor?.[m.id], t);
-    const supply = lerp(times, tl.supply_current_by_motor?.[m.id], t);
-    const temp   = lerp(times, tl.temp_by_motor?.[m.id],           t);
-    const tCls   = temp != null ? (temp >= 90 ? 'val-crit' : temp >= 70 ? 'val-warn' : '') : '';
-    return `<tr>
-      <td class="motor-name" style="border-left:3px solid ${m.color};padding-left:10px">${m.name}</td>
-      <td>${fmt(battV,2)}</td><td>${fmt(battA)}</td>
-      <td>${fmt(stator)}</td><td>${fmt(supply)}</td>
-      <td class="${tCls}">${fmt(temp)}</td>
-    </tr>`;
-  }).join('');
-}
-
-// ─── Shared chart builder ─────────────────────────────────────────────────────
-function buildTimeChart(canvasId, times, datasets, opts = {}) {
-  const ctx = $(canvasId)?.getContext('2d');
-  if (!ctx) return null;
-  const { yLabel, segments = [], brownouts = [], yMin, yMax } = opts;
-  const duration = times[times.length - 1] || 1;
-  const { xMin, xMax } = State.zoom;
-
-  const segPlugin = {
-    id: 'segBg_' + canvasId,
-    beforeDraw({ ctx, chartArea: ca, scales: { x } }) {
-      if (!ca) return;
-      segments.forEach(seg => {
-        ctx.save();
-        ctx.fillStyle = seg.type === 'auto' ? 'rgba(245,158,11,0.08)' :
-                        seg.type === 'teleop' ? 'rgba(59,130,246,0.08)' : 'rgba(55,65,81,0.12)';
-        ctx.fillRect(x.getPixelForValue(seg.start), ca.top, x.getPixelForValue(seg.end) - x.getPixelForValue(seg.start), ca.height);
-        ctx.restore();
-      });
-      brownouts.forEach(ev => {
-        ctx.save(); ctx.strokeStyle = 'rgba(239,68,68,0.7)';
-        ctx.lineWidth = 1; ctx.setLineDash([3,3]);
-        ctx.beginPath(); ctx.moveTo(x.getPixelForValue(ev.time), ca.top); ctx.lineTo(x.getPixelForValue(ev.time), ca.bottom); ctx.stroke();
-        ctx.restore();
-      });
+    ctx.strokeStyle = th.critical;
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (const b of d.brownout_events) {
+      const px = Math.round(x.getPixelForValue(b.time)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
     }
-  };
+    ctx.restore();
+  },
+};
 
-  const cursorPlugin = {
-    id: 'cursor_' + canvasId,
-    afterDraw({ ctx, chartArea: ca, scales: { x } }) {
-      if (!ca) return;
-      const xp = x.getPixelForValue(State.currentTime);
-      ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
-      ctx.beginPath(); ctx.moveTo(xp, ca.top); ctx.lineTo(xp, ca.bottom); ctx.stroke();
-      ctx.fillStyle = 'white'; ctx.beginPath(); ctx.arc(xp, ca.top+8, 3, 0, Math.PI*2); ctx.fill();
-      ctx.restore();
-    }
-  };
+// The cursor is a DOM line over the canvas, so moving it never redraws the chart.
+const cursorPlugin = { id: 'cursor', afterRender: chart => placeCursor(chart) };
 
-  const chartDatasets = datasets.map(ds => ({
-    label: ds.label,
-    data: ds.data.map((v, j) => ({ x: times[j], y: v })),
-    borderColor: ds.color,
-    backgroundColor: ds.dashed ? 'transparent' : hexToRgba(ds.color, 0.08),
-    borderWidth: ds.dashed ? 1 : 1.5,
-    borderDash: ds.dashed ? [4,4] : [],
-    pointRadius: 0, tension: 0.3, fill: !ds.dashed,
-  }));
+function placeCursor(chart) {
+  const el = chart.$cursor, a = chart.chartArea;
+  if (!el || !a) return;
+  const px = chart.scales.x.getPixelForValue(State.t);
+  const on = px >= a.left - 0.5 && px <= a.right + 0.5;
+  el.style.display = on ? 'block' : 'none';
+  if (on) {
+    el.style.transform = `translateX(${px}px)`;
+    el.style.top = `${a.top}px`;
+    el.style.height = `${a.height}px`;
+  }
+}
 
-  const chart = new Chart(ctx, {
+function timeChart(id, series, { yMin, yMax, legend = series.length > 1 } = {}) {
+  const canvas = $(id);
+  const th = State.theme;
+  const plot = canvas.parentElement;
+  const cursor = plot.querySelector('.plot-cursor') || plot.appendChild(Object.assign(
+    document.createElement('div'), { className: 'plot-cursor' }));
+  cursor.style.left = '0';
+
+  const chart = new Chart(canvas, {
     type: 'line',
-    data: { datasets: chartDatasets },
+    data: { datasets: series.map(datasetFor) },
     options: {
-      responsive: true, maintainAspectRatio: false, animation: false,
+      parsing: false,
+      normalized: true,
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { display: datasets.length > 1, labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 20 } },
+        decimation: { enabled: true, algorithm: 'min-max' },
+        legend: {
+          display: legend, position: 'bottom', align: 'start',
+          labels: { color: th.ink2, boxWidth: 12, boxHeight: 12, font: { size: 12 } },
+        },
         tooltip: {
-          backgroundColor: '#1a1f2e', borderColor: '#2d3748', borderWidth: 1,
-          titleColor: '#e2e8f0', bodyColor: '#94a3b8',
-          callbacks: { title: items => items[0]?.parsed?.x?.toFixed(2) + 's' }
-        }
+          backgroundColor: th.surface, borderColor: th.rule, borderWidth: 1,
+          titleColor: th.ink, bodyColor: th.ink2, padding: 8, boxPadding: 4,
+          titleFont: { weight: '600' },
+          callbacks: {
+            title: items => `${items[0]?.parsed.x.toFixed(2)} s`,
+            label: c => ` ${c.dataset.label}: ${fmt(c.parsed.y, 1)}`,
+          },
+        },
       },
       scales: {
-        x: { type: 'linear', min: xMin, max: xMax,
-          grid: { color: 'rgba(45,55,72,0.6)' },
-          ticks: { color: '#64748b', font: { size: 10 }, callback: v => v.toFixed(0)+'s', maxTicksLimit: 10 } },
-        y: { min: yMin, max: yMax,
-          grid: { color: 'rgba(45,55,72,0.6)' },
-          ticks: { color: '#64748b', font: { size: 10 } },
-          title: { display: !!yLabel, text: yLabel, color: '#64748b', font: { size: 10 } } }
-      }
+        x: {
+          type: 'linear', min: State.zoom.min, max: State.zoom.max,
+          grid: { color: th.grid }, border: { display: false },
+          ticks: { color: th.ink3, maxTicksLimit: 10, maxRotation: 0, callback: v => `${Math.round(v)} s` },
+        },
+        y: {
+          min: yMin, max: yMax,
+          grid: { color: th.grid }, border: { display: false },
+          ticks: { color: th.ink3, maxTicksLimit: 6 },
+        },
+      },
     },
-    plugins: [segPlugin, cursorPlugin],
+    plugins: [bandsPlugin, cursorPlugin],
   });
-
-  // Wheel zoom
-  $(canvasId)?.addEventListener('wheel', e => {
-    e.preventDefault();
-    const r = $(canvasId).getBoundingClientRect();
-    zoomAround((e.clientX - r.left) / r.width, e.deltaY > 0 ? 1.25 : 0.8);
-  }, { passive: false });
-
+  chart.$cursor = cursor;
+  placeCursor(chart);
+  State.charts[id] = chart;
   return chart;
 }
 
-function updateChartCrosshairs() {
-  Object.values(State.charts).forEach(c => c?.update('none'));
+function datasetFor(s) {
+  return {
+    label: s.label, data: points(s.data),
+    borderColor: s.color, backgroundColor: s.color,
+    borderWidth: s.width ?? 1.5, pointRadius: 0, pointHoverRadius: 3,
+    tension: 0, spanGaps: false, fill: false,
+  };
 }
 
-// ─── Energy Panel ─────────────────────────────────────────────────────────────
-function ensureEnergyCanvases() {
-  const panel = document.querySelector('[data-panel="energy"]');
-  if (!panel) return;
-  [
-    { id: 'chart-energy-stator-v', label: 'Stator Voltage (Per Motor)' },
-    { id: 'chart-energy-supply',   label: 'Supply Current (Per Motor)' },
-  ].forEach(({ id, label }) => {
-    if (!$(id)) {
-      const card = document.createElement('div');
-      card.className = 'chart-card';
-      card.innerHTML = `<div class="chart-card-label">${label}</div>
-        <div style="position:relative;height:220px"><canvas id="${id}"></canvas></div>`;
-      panel.appendChild(card);
-    }
-  });
-}
-
-function renderEnergyPanel(data) {
-  const energy    = data.energy_by_subsystem || {};
-  const bySegment = data.energy_by_segment   || [];
-  const tl        = data.timeline            || {};
-  const times     = tl.time || [];
-  const segs      = data.match_segments  || [];
-  const bouts     = data.brownout_events || [];
-
-  const subsystems  = Object.entries(energy);
-  const subsysTotal = subsystems.reduce((s,[,v]) => s+v, 0);
-  const totalEl = $('total-wh-display');
-  if (totalEl) totalEl.textContent = subsysTotal > 0 ? subsysTotal.toFixed(1) : (data.total_energy_wh?.toFixed(1) ?? '–');
-
-  // Donut
-  if (subsystems.length && $('chart-energy-donut')) {
-    if (State.charts['energy-donut']) State.charts['energy-donut'].destroy();
-    const colors = subsystems.map(([k]) => k === 'swerve' ? COLORS.swerve : COLORS.subsystems);
-    State.charts['energy-donut'] = new Chart($('chart-energy-donut').getContext('2d'), {
-      type: 'doughnut',
-      data: { labels: subsystems.map(([k]) => k),
-        datasets: [{ data: subsystems.map(([,v]) => v.toFixed(2)), backgroundColor: colors, borderColor: '#1a1f2e', borderWidth: 3 }] },
-      options: { responsive: true, maintainAspectRatio: false, cutout: '68%',
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1f2e', borderColor: '#2d3748', borderWidth: 1,
-          callbacks: { label: i => `${i.label}: ${i.parsed.toFixed(2)} Wh` } } } }
-    });
-    $('energy-legend').innerHTML = subsystems.map(([k,v],i) => `
-      <div class="energy-leg-item">
-        <span class="energy-leg-swatch" style="background:${colors[i]}"></span>
-        <span>${k}</span><span class="energy-leg-val">${v.toFixed(2)} Wh</span>
-      </div>`).join('');
-  }
-
-  // Segment bar
-  if (bySegment.length && $('chart-energy-segments')) {
-    if (State.charts['energy-seg']) State.charts['energy-seg'].destroy();
-    State.charts['energy-seg'] = new Chart($('chart-energy-segments').getContext('2d'), {
-      type: 'bar',
-      data: { labels: bySegment.map(s => s.label),
-        datasets: [{ label: 'Energy (Wh)', data: bySegment.map(s => s.wh.toFixed(2)),
-          backgroundColor: bySegment.map(s => hexToRgba(s.type==='auto'?COLORS.auto:s.type==='teleop'?COLORS.teleop:COLORS.disabled, 0.7)),
-          borderColor: bySegment.map(s => s.type==='auto'?COLORS.auto:s.type==='teleop'?COLORS.teleop:COLORS.disabled),
-          borderWidth: 1, borderRadius: 4 }] },
-      options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a1f2e', borderColor: '#2d3748', borderWidth: 1,
-          callbacks: { label: i => `${i.parsed.y} Wh` } } },
-        scales: {
-          x: { grid: { color: 'rgba(45,55,72,0.6)' }, ticks: { color: '#64748b', font: { size: 10 } } },
-          y: { grid: { color: 'rgba(45,55,72,0.6)' }, ticks: { color: '#64748b', font: { size: 10 } },
-               title: { display: true, text: 'Wh', color: '#64748b', font: { size: 10 } } } } }
-    });
-  }
-
-  // Stator voltage timeline
-  if (tl.stator_voltage_by_motor && times.length) {
-    const activeIds = Object.keys(tl.stator_voltage_by_motor).filter(mid => {
-      const arr = tl.stator_voltage_by_motor[mid];
-      return arr?.some(v => v != null && Math.abs(v) > 0.01);
-    });
-    if (activeIds.length) {
-      if (State.charts['energy-stator-v']) State.charts['energy-stator-v'].destroy();
-      State.charts['energy-stator-v'] = buildTimeChart('chart-energy-stator-v', times,
-        activeIds.map(mid => {
-          const motor = (data.motors||[]).find(m => m.id === mid);
-          return { label: motor?.name ?? mid, data: tl.stator_voltage_by_motor[mid], color: motor?.color ?? '#888' };
-        }),
-        { yLabel: 'Volts', segments: segs, brownouts: bouts });
-    }
-  }
-
-  // Supply current timeline
-  if (tl.supply_current_by_motor && times.length) {
-    const mids = Object.keys(tl.supply_current_by_motor);
-    const total = times.map((_, i) => mids.reduce((s,m) => s + Math.abs(tl.supply_current_by_motor[m][i] ?? 0), 0));
-    const ds = [{ label: 'Total Supply (A)', data: total, color: COLORS.supply }];
-    mids.forEach(mid => {
-      const motor = (data.motors||[]).find(m => m.id === mid);
-      ds.push({ label: motor?.name ?? mid, data: tl.supply_current_by_motor[mid], color: motor?.color ?? '#888', dashed: true });
-    });
-    if (State.charts['energy-supply']) State.charts['energy-supply'].destroy();
-    State.charts['energy-supply'] = buildTimeChart('chart-energy-supply', times, ds,
-      { yLabel: 'Amps', segments: segs, brownouts: bouts });
-  }
-}
-
-// ─── Heatmap ──────────────────────────────────────────────────────────────────
-function renderHeatmap(data) {
-  const motors = data.motors || [];
-  const container = $('heatmap-container');
-  if (!container || !motors.length) return;
-
-  const critTemp = 90, warnTemp = 70;
-  function tempColor(t) {
-    if (t == null) return '#1e2535';
-    const norm = Math.min(1, t / critTemp);
-    if (norm < 0.5) {
-      const f = norm * 2;
-      return `rgb(${Math.round(59+f*(245-59))},${Math.round(130+f*(158-130))},${Math.round(246+f*(11-246))})`;
-    }
-    const f = (norm-0.5)*2;
-    return `rgb(${Math.round(245+f*(239-245))},${Math.round(158+f*(68-158))},${Math.round(11+f*(68-11))})`;
-  }
-
-  // Group by subsystem
-  const bySubsys = {};
-  motors.forEach(m => { if (!bySubsys[m.subsystem]) bySubsys[m.subsystem] = []; bySubsys[m.subsystem].push(m); });
-
-  let html = '';
-  for (const [name, mlist] of Object.entries(bySubsys)) {
-    const col = mlist[0]?.color ?? '#888';
-    html += `<div style="margin-bottom:14px">
-      <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.07em;
-                  margin-bottom:8px;border-left:3px solid ${col};padding-left:8px">${name}</div>
-      <div class="heatmap-grid">`;
-    mlist.forEach(m => {
-      const t = m.max_temp, bg = tempColor(t);
-      const textCol = t && t > 50 ? '#fff' : '#e2e8f0';
-      const cls = t == null ? '' : t >= critTemp ? 'temp-crit' : t >= warnTemp ? 'temp-warn' : '';
-      html += `<div class="heat-cell ${cls}" title="${m.name}: max ${t?.toFixed(1)??'N/A'}°C | avg ${m.avg_temp?.toFixed(1)??'N/A'}°C">
-        <div class="heat-name">${m.name}</div>
-        <div class="heat-temp" style="color:${textCol}">${t != null ? t.toFixed(1)+'°C' : '–'}</div>
-        <div class="heat-bar"><div class="heat-bar-fill" style="width:${t?Math.min(100,t/critTemp*100).toFixed(1):0}%;background:${bg}"></div></div>
-      </div>`;
-    });
-    html += `</div></div>`;
-  }
-  html += `<div class="heatmap-legend"><span>Cool</span><div class="heatmap-gradient"></div><span>Hot (${critTemp}°C+)</span></div>`;
-  container.innerHTML = html;
-}
-
-// ─── Detail Table ─────────────────────────────────────────────────────────────
-function renderDetailTable(data) {
-  const motors = data.motors || [];
-  const container = $('detail-table-container');
-  if (!container || !motors.length) return;
-  container.innerHTML = `
-    <div class="table-wrap"><table class="detail-table">
-      <thead><tr>
-        <th>Motor</th><th>Subsystem</th><th>Peak Stator A</th><th>Peak Supply A</th>
-        <th>Avg Supply A</th><th>Max Temp °C</th><th>Avg Temp °C</th><th>Energy Wh</th>
-      </tr></thead>
-      <tbody>${motors.map(m => `<tr>
-        <td class="motor-name">${m.name}</td>
-        <td><span class="subsys-badge" style="background:${m.color}22;color:${m.color}">${m.subsystem}</span></td>
-        <td>${m.peak_stator_current?.toFixed(1) ?? '–'}</td>
-        <td>${m.peak_supply_current?.toFixed(1) ?? '–'}</td>
-        <td>${m.avg_supply_current?.toFixed(1)  ?? '–'}</td>
-        <td class="${m.max_temp >= 90?'val-crit':m.max_temp >= 70?'val-warn':''}">${m.max_temp?.toFixed(1) ?? '–'}</td>
-        <td>${m.avg_temp?.toFixed(1)  ?? '–'}</td>
-        <td>${m.energy_wh?.toFixed(2) ?? '–'}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>`;
-}
-
-// ─── Tab switching ─────────────────────────────────────────────────────────────
-function switchTab(tab) {
-  State.activeTab = tab;
-  $$('.tab-btn').forEach(b => {
-    b.classList.toggle('tab-active',   b.dataset.tab === tab);
-    b.classList.toggle('tab-inactive', b.dataset.tab !== tab);
-  });
-  $$('.tab-panel').forEach(p => { p.style.display = p.dataset.panel === tab ? 'block' : 'none'; });
-  setTimeout(() => Object.values(State.charts).forEach(c => c?.resize()), 50);
-}
-
-// ─── New session ───────────────────────────────────────────────────────────────
-function newSession() {
-  State.session = null; State.currentTime = 0; State.playing = false;
-  State.zoom = { xMin: 0, xMax: 1 };
-  Object.values(State.charts).forEach(c => c?.destroy());
+function teardownCharts() {
+  Object.values(State.charts).forEach(c => c.destroy());
   State.charts = {};
-  $('dashboard-panel').style.display = 'none';
-  $('upload-panel').style.display    = '';   // let CSS flex rule take over
-  $('upload-status').innerHTML = '';
-  if ($('file-input')) $('file-input').value = '';
+  document.querySelectorAll('.plot-cursor').forEach(el => { el.style.display = 'none'; });
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function showError(msg) { $('upload-status').innerHTML = `<div class="error-msg">⚠ ${msg}</div>`; }
-function showUploadState(_, msg) { $('upload-status').innerHTML = `<div class="info-msg">${msg}</div>`; }
+function extent(arr) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of arr) if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  return lo <= hi ? [lo, hi] : [0, 1];
+}
+
+function buildTimelineCharts() {
+  const d = State.session, tl = d.timeline, th = State.theme;
+
+  const [vLo, vHi] = extent(tl.battery_voltage);
+  timeChart('chart-voltage',
+    [{ label: 'Battery voltage', data: tl.battery_voltage, color: th.ink, width: 1.5 }],
+    { yMin: Math.floor(Math.min(vLo, 7) - 0.5), yMax: Math.ceil(vHi + 0.3) });
+
+  const current = [{ label: 'Whole robot (PDH)', data: tl.battery_current, color: th.series[1] }];
+  for (const [sid, arr] of Object.entries(d.busTotals)) {
+    const idx = d.subsystemIndex[sid] ?? 0;
+    const name = d.subsystems?.[idx]?.name ?? sid;
+    current.push({ label: name, data: arr, color: subsystemColorValue(idx) });
+  }
+  timeChart('chart-current', current, { yMin: 0 });
+
+  $('motor-charts').hidden = !d.hasMotorData;
+  $('no-motor-data').hidden = d.hasMotorData;
+  if (d.hasMotorData) {
+    MOTOR_CHARTS.forEach(([id, key, opts]) => timeChart(id, motorSeries(key), { ...opts, legend: true }));
+    noteMissing();
+  }
+}
+
+const MOTOR_CHARTS = [
+  ['chart-supply', 'supply_current_by_motor', {}],
+  ['chart-stator', 'stator_current_by_motor', {}],
+  ['chart-motor-voltage', 'motor_voltage_by_motor', {}],
+  ['chart-temp', 'temp_by_motor', {}],
+];
+
+function motorSeries(key) {
+  const d = State.session, src = d.timeline[key] || {};
+  return State.slots.flatMap((id, slot) => (id && src[id])
+    ? [{ label: d.motorById[id].name, data: src[id], color: State.theme.series[slot] }]
+    : []);
+}
+
+function noteMissing() {
+  const d = State.session;
+  for (const [id, key] of MOTOR_CHARTS) {
+    const card = $(id).closest('.card');
+    const note = card.querySelector('.chart-note') || card.insertBefore(
+      Object.assign(document.createElement('p'), { className: 'sub chart-note' }), card.querySelector('.plot'));
+    const missing = State.slots.filter(mid => mid && !d.timeline[key]?.[mid]).map(mid => d.motorById[mid].name);
+    note.textContent = missing.length ? `Not logged for ${missing.join(', ')}.` : '';
+    note.hidden = !missing.length;
+  }
+}
+
+function updateMotorCharts() {
+  for (const [id, key] of MOTOR_CHARTS) {
+    const c = State.charts[id];
+    if (!c) continue;
+    c.data.datasets = motorSeries(key).map(datasetFor);
+    c.update('none');
+  }
+  noteMissing();
+}
+
+// ─── Values at cursor (also the motor picker) ─────────────────────────────────
+function renderLiveTable(d) {
+  const groups = new Map();
+  d.motors.forEach(m => {
+    if (!groups.has(m.subsystem_id)) groups.set(m.subsystem_id, []);
+    groups.get(m.subsystem_id).push(m);
+  });
+  let html = '';
+  for (const [sid, motors] of groups) {
+    html += `<tr class="group-row" data-bus="${esc(sid)}"><td>${esc(motors[0].subsystem)}</td>`
+      + `<td title="Total supply current on this bus">–</td><td colspan="2"></td></tr>`;
+    for (const m of motors) {
+      html += `<tr class="motor${m.has_data ? '' : ' no-data'}" data-id="${esc(m.id)}">
+        <td><button class="pick" aria-pressed="false" ${m.has_data ? '' : 'disabled'}
+          title="${m.has_data ? 'Compare in the motor charts' : 'No data in the logs'}"><span class="swatch"></span>${esc(m.name)}</button></td>
+        <td>–</td><td>–</td><td>–</td></tr>`;
+    }
+  }
+  $('live-body').innerHTML = html;
+  State.liveRows = [...$('live-body').querySelectorAll('tr.motor')].map(tr => ({
+    id: tr.dataset.id, btn: tr.querySelector('.pick'), cells: tr.querySelectorAll('td'),
+  }));
+  State.liveBusCells = [...$('live-body').querySelectorAll('tr.group-row')].map(tr => ({
+    bus: tr.dataset.bus, cell: tr.children[1],
+  }));
+  paintSelection();
+}
+
+function paintSelection() {
+  for (const r of State.liveRows) {
+    const slot = State.slots.indexOf(r.id);
+    r.btn.setAttribute('aria-pressed', String(slot >= 0));
+    r.btn.querySelector('.swatch').style.background = slot >= 0 ? `var(--series-${slot + 1})` : '';
+  }
+  const full = State.slots.every(Boolean);
+  $('motor-pick-hint').textContent = full
+    ? 'Comparing four motors. Unselect one in Values at cursor to swap it.'
+    : 'Comparing the selected motors. Pick up to four in Values at cursor.';
+}
+
+function toggleMotor(id) {
+  const slot = State.slots.indexOf(id);
+  if (slot >= 0) State.slots[slot] = null;
+  else {
+    const free = State.slots.indexOf(null);
+    if (free < 0) return;
+    State.slots[free] = id;
+  }
+  paintSelection();
+  updateMotorCharts();
+}
+
+function updateLive() {
+  const d = State.session, tl = d.timeline;
+  const i = clamp(Math.round(State.t / d.dt), 0, tl.time.length - 1);
+  if (i === State.liveIdx) return;
+  State.liveIdx = i;
+
+  $('live-time').textContent = `${State.t.toFixed(2)} s`;
+  const v = tl.battery_voltage[i], a = tl.battery_current[i];
+  $('live-batt-v').textContent = v == null ? '–' : `${fmt(v, 2)} V`;
+  $('live-batt-a').textContent = a == null ? '–' : `${fmt(a, 0)} A`;
+
+  const sup = tl.supply_current_by_motor, sta = tl.stator_current_by_motor, tmp = tl.temp_by_motor;
+  const breaker = d.thresholds.breaker_amps;
+  for (const b of State.liveBusCells) b.cell.textContent = fmt(d.busTotals[b.bus]?.[i]);
+  for (const r of State.liveRows) {
+    const s = sup?.[r.id]?.[i];
+    r.cells[1].textContent = fmt(s);
+    r.cells[1].className = s != null && Math.abs(s) > breaker ? 'val-warn' : '';
+    r.cells[2].textContent = fmt(sta?.[r.id]?.[i]);
+    const t = tmp?.[r.id]?.[i];
+    r.cells[3].textContent = fmt(t, 0);
+    r.cells[3].className = tempClass(t);
+  }
+}
+
+const tempClass = t => t == null ? '' : t >= CRIT_TEMP ? 'val-crit' : t >= WARN_TEMP ? 'val-warn' : '';
+
+// ─── Energy ───────────────────────────────────────────────────────────────────
+function barRow(label, sub, value, max, color, digits = 1, mark = null) {
+  const w = max > 0 ? clamp(value / max * 100, 0, 100) : 0;
+  const m = mark != null && max > 0 ? `<div class="bar-mark" style="left:${clamp(mark / max * 100, 0, 100)}%"></div>` : '';
+  return `<div class="bar-row">
+    <div class="label" title="${esc(label)}">${esc(label)}${sub ? `<small>${esc(sub)}</small>` : ''}</div>
+    <div class="bar-track"><div class="bar-fill" style="width:${w.toFixed(2)}%;background:${color}"></div>${m}</div>
+    <div class="value">${fmt(value, digits)}</div>
+  </div>`;
+}
+
+function renderEnergy(d) {
+  const motorWh = d.motors.reduce((s, m) => s + (m.energy_wh ?? 0), 0);
+  const total = d.total_energy_wh;
+  const wh = v => `<b>${fmt(v, 1)}&nbsp;Wh</b>`;
+  let lede;
+  if (total == null) lede = `Robot current wasn't logged, so whole-robot energy is unavailable. Motors drew ${wh(motorWh)}.`;
+  else if (!d.hasMotorData) lede = `${wh(total)} drawn from the battery. Add the CANivore logs to see which motors used it.`;
+  else lede = `${wh(total)} drawn from the battery. Motors on the CANivores account for ${wh(motorWh)}; the other
+    ${wh(Math.max(0, total - motorWh))} went to the roboRIO, radio, sensors and other PDH loads.`;
+  $('energy-lede').innerHTML = lede;
+
+  const b = d.battery;
+  $('battery-facts').innerHTML = [
+    ['Resting voltage', b ? `${fmt(b.resting_voltage, 2)} V` : '–'],
+    ['Internal resistance', b ? `${fmt(b.resistance_mohm, 1)} mΩ` : '–'],
+    ['Charge used', `${fmt(d.charge_ah, 2)} Ah`],
+    [`Time under ${d.thresholds.sag_voltage} V`, `${fmt(d.sag_seconds, 1)} s`],
+  ].map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('');
+  $('battery-note').hidden = !!b;
+
+  const phases = d.energy_by_segment;
+  const pMax = Math.max(0, ...phases.map(p => p.wh ?? 0));
+  $('energy-phases').innerHTML = phases.length ? phases.map(p => barRow(
+    p.type[0].toUpperCase() + p.type.slice(1), `${p.start.toFixed(0)}–${p.end.toFixed(0)} s`,
+    p.wh ?? 0, pMax, `var(--${p.type}-solid)`)).join('') : '<p class="empty">No battery current in the log.</p>';
+
+  const withEnergy = d.motors.filter(m => m.energy_wh != null);
+  const mMax = Math.max(0, ...withEnergy.map(m => m.energy_wh));
+  let html = '';
+  (d.subsystems || []).forEach((sub, idx) => {
+    const ms = withEnergy.filter(m => m.subsystem_id === sub.id).sort((a, b) => b.energy_wh - a.energy_wh);
+    if (!ms.length) return;
+    html += `<div class="bar-group">${esc(sub.name)}, ${fmt(d.energy_by_subsystem[sub.id], 1)} Wh</div>`;
+    html += ms.map(m => barRow(m.name, '', m.energy_wh, mMax, subsystemColor(idx), 2)).join('');
+  });
+  $('energy-motors').innerHTML = html || '<p class="empty">No motor data. Add the CANivore hoot logs.</p>';
+}
+
+// ─── Brownouts ───────────────────────────────────────────────────────────────
+function renderBrownouts(d) {
+  const events = d.brownout_events;
+  const name = id => d.motorById[id]?.name ?? id;
+  $('brownouts-table').hidden = !events.length;
+  if (!events.length) {
+    $('brownout-summary').textContent = `No brownouts. The lowest voltage was ${fmt(d.min_voltage, 2)} V.`;
+    return;
+  }
+  const total = events.reduce((s, e) => s + (e.duration ?? 0), 0);
+  const counts = {};
+  events.forEach(e => e.top_motors.forEach(m => { counts[m.id] = (counts[m.id] || 0) + 1; }));
+  const [worst, n] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [];
+  $('brownout-summary').textContent = `${events.length} brownout${events.length > 1 ? 's' : ''}, ${fmt(total, 2)} s in total.`
+    + (worst ? ` ${name(worst)} was one of the three biggest supply draws in ${n} of them.` : '');
+  $('brownouts-table').querySelector('tbody').innerHTML = events.map(e => `<tr>
+    <td><button class="link-num" data-time="${e.time}">${fmt(e.time, 2)} s</button></td>
+    <td>${fmt((e.duration ?? 0) * 1000, 0)} ms</td>
+    <td>${fmt(e.min_voltage, 2)} V</td>
+    <td>${fmt(e.peak_current, 0)} A</td>
+    <td class="motors-cell">${e.top_motors.map(m => `${esc(name(m.id))} ${fmt(m.amps, 0)} A`).join(', ') || 'No motor data at this time'}</td>
+  </tr>`).join('');
+}
+
+function showMoment(t) {
+  switchTab('timeline');
+  setZoom(t - 5, t + 5);
+  seek(t);
+  document.querySelector('.scrubber').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+// ─── Temperature ──────────────────────────────────────────────────────────────
+function renderTemperature(d) {
+  const withTemp = d.motors.filter(m => m.max_temp != null).sort((a, b) => b.max_temp - a.max_temp);
+  const scale = Math.max(100, ...withTemp.map(m => m.max_temp));
+  const color = t => t >= CRIT_TEMP ? 'var(--critical)' : t >= WARN_TEMP ? 'var(--warning)' : 'var(--series-3)';
+  $('temp-bars').innerHTML = withTemp.length
+    ? withTemp.map(m => barRow(m.name, '', m.max_temp, scale, color(m.max_temp), 0, m.avg_temp)).join('')
+    : '<p class="empty">No motor temperature in these logs.</p>';
+  const missing = d.motors.filter(m => m.max_temp == null).map(m => m.name);
+  $('temp-missing').textContent = missing.length && withTemp.length ? `No temperature logged for ${missing.join(', ')}.` : '';
+}
+
+// ─── Motors table ─────────────────────────────────────────────────────────────
+const tableSort = { key: 'energy_wh', dir: -1 };
+
+function renderMotorTable(d) {
+  const { key, dir } = tableSort;
+  const rows = [...d.motors].sort((a, b) => {
+    const x = a[key], y = b[key];
+    if (x == null) return y == null ? 0 : 1;
+    if (y == null) return -1;
+    return (typeof x === 'string' ? x.localeCompare(y) : x - y) * dir;
+  });
+  document.querySelectorAll('#motor-table th').forEach(th => {
+    if (th.dataset.key === key) th.setAttribute('aria-sort', dir > 0 ? 'ascending' : 'descending');
+    else th.removeAttribute('aria-sort');
+  });
+  document.querySelector('#motor-table tbody').innerHTML = rows.map(m => `<tr>
+    <td>${esc(m.name)}</td>
+    <td><span class="badge">${esc(m.subsystem)}</span></td>
+    <td>${m.channel ?? '–'}</td>
+    <td>${fmt(m.peak_supply_current)}</td>
+    <td>${fmt(m.avg_supply_current)}</td>
+    <td>${fmt(m.rms_supply_current)}</td>
+    <td class="${m.over_breaker_s > 0 ? 'val-warn' : ''}">${fmt(m.over_breaker_s)}</td>
+    <td>${fmt(m.peak_stator_current)}</td>
+    <td class="${tempClass(m.max_temp)}">${fmt(m.max_temp, 0)}</td>
+    <td>${fmt(m.avg_temp, 0)}</td>
+    <td>${fmt(m.energy_wh, 2)}</td>
+  </tr>`).join('');
+}
+
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  State.tab = tab;
+  const hash = new URLSearchParams(location.hash.slice(1));
+  if (hash.has('example')) {
+    if (tab === 'timeline') hash.delete('tab'); else hash.set('tab', tab);
+    history.replaceState(null, '', `#${hash}`);
+  }
+  document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  document.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== tab; });
+  if (tab === 'timeline' && State.session) {
+    if (!State.charts['chart-voltage']) buildTimelineCharts();
+    else State.zoomDirty = true;
+    State.liveIdx = -1;
+    queueFrame();
+  }
+}
+
+function rebuildForTheme() {
+  State.theme = readTheme();
+  if (!State.session) return;
+  teardownCharts();
+  if (State.tab === 'timeline') buildTimelineCharts();
+}
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+function bindTrack() {
+  const track = $('track');
+  const timeAt = e => {
+    const r = track.getBoundingClientRect();
+    return clamp((e.clientX - r.left) / r.width, 0, 1) * State.session.duration;
+  };
+  track.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || !State.session) return;
+    track.setPointerCapture(e.pointerId);
+    seek(timeAt(e));
+  });
+  track.addEventListener('pointermove', e => {
+    if (track.hasPointerCapture(e.pointerId)) seek(timeAt(e));
+  });
+  track.addEventListener('wheel', e => {
+    if (!State.session) return;
+    e.preventDefault();
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) panBy(e.deltaX / track.clientWidth * State.session.duration);
+    else zoomAt(timeAt(e), e.deltaY > 0 ? 1.25 : 0.8);
+  }, { passive: false });
+  track.addEventListener('dblclick', resetZoom);
+}
+
+// Drag across a chart to zoom into that span; a click without dragging moves the cursor.
+function bindChartBrush() {
+  document.querySelectorAll('.plot canvas').forEach(canvas => {
+    const box = canvas.parentElement.appendChild(Object.assign(document.createElement('div'), { className: 'brush' }));
+    let start = null;
+    const xAt = e => e.clientX - canvas.getBoundingClientRect().left;
+    const area = () => State.charts[canvas.id]?.chartArea;
+
+    canvas.addEventListener('pointerdown', e => {
+      const a = area();
+      if (!a || e.button !== 0) return;
+      const x = xAt(e);
+      if (x < a.left || x > a.right) return;
+      start = x;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', e => {
+      const a = area();
+      if (start === null || !a) return;
+      const x = clamp(xAt(e), a.left, a.right);
+      box.style.display = Math.abs(x - start) > 4 ? 'block' : 'none';
+      box.style.left = `${Math.min(x, start)}px`;
+      box.style.width = `${Math.abs(x - start)}px`;
+      box.style.top = `${a.top}px`;
+      box.style.height = `${a.height}px`;
+    });
+    canvas.addEventListener('pointerup', e => {
+      const chart = State.charts[canvas.id];
+      if (start === null || !chart) return;
+      const a = chart.chartArea, x = clamp(xAt(e), a.left, a.right), from = start;
+      start = null;
+      box.style.display = 'none';
+      const scale = chart.scales.x;
+      if (Math.abs(x - from) > 4) setZoom(scale.getValueForPixel(Math.min(x, from)), scale.getValueForPixel(Math.max(x, from)));
+      else seek(scale.getValueForPixel(x));
+    });
+    canvas.addEventListener('pointercancel', () => { start = null; box.style.display = 'none'; });
+  });
+}
+
+function bindChartWheel() {
+  document.querySelectorAll('.plot canvas').forEach(canvas => {
+    canvas.addEventListener('wheel', e => {
+      const chart = State.charts[canvas.id];
+      if (!chart) return;
+      const span = State.zoom.max - State.zoom.min;
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const r = canvas.getBoundingClientRect();
+        zoomAt(chart.scales.x.getValueForPixel(e.clientX - r.left), e.deltaY > 0 ? 1.25 : 0.8);
+      } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        e.preventDefault();
+        panBy(e.deltaX / chart.chartArea.width * span);
+      }
+    }, { passive: false });
+    canvas.addEventListener('dblclick', () => State.session && resetZoom());
+  });
+}
+
+function onKey(e) {
+  if (!State.session || $('dashboard-view').hidden) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.target.closest('button') && (e.key === ' ' || e.key === 'Enter')) return;
+  const step = e.shiftKey ? 5 : 1;
+  switch (e.key) {
+    case ' ': togglePlay(); break;
+    case 'ArrowLeft': seek(State.t - step); break;
+    case 'ArrowRight': seek(State.t + step); break;
+    case 'Home': seek(0); break;
+    case 'End': seek(State.session.duration); break;
+    case 'Escape': resetZoom(); break;
+    case '+': case '=': zoomStep(0.5); break;
+    case '-': zoomStep(2); break;
+    default: return;
+  }
+  e.preventDefault();
+}
+
+function bindDropZone() {
+  const zone = $('drop-zone'), input = $('file-input');
+  input.addEventListener('change', () => addFiles(input.files));
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    addFiles(e.dataTransfer.files);
+  });
+  // Dropping a file anywhere else shouldn't navigate away from the app.
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => e.preventDefault());
+}
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 function init() {
-  initDropZone();
-  $$('.tab-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+  State.theme = readTheme();
+  try { State.prefixMap = JSON.parse($('upload-view').dataset.prefixMap || '{}'); } catch { /* keep {} */ }
+
+  if (typeof Chart === 'undefined') {
+    setStatus('Chart library failed to load. Check static/js/vendor/chart.umd.min.js.', true);
+    return;
+  }
+
+  Chart.defaults.font.family = "'Barlow', system-ui, sans-serif";
+  bindDropZone();
+  bindTrack();
+  bindChartWheel();
+  bindChartBrush();
+  $('zoom-in-btn').addEventListener('click', () => zoomStep(0.5));
+  $('zoom-out-btn').addEventListener('click', () => zoomStep(2));
+  $('analyze-btn').addEventListener('click', analyzeFiles);
+  $('clear-btn').addEventListener('click', clearFiles);
+  document.querySelectorAll('.example-btn').forEach(b => b.addEventListener('click', () => loadExample(b.dataset.example)));
+  $('new-session-btn').addEventListener('click', newSession);
+  $('play-btn').addEventListener('click', () => togglePlay());
+  $('speed-btn').addEventListener('click', cycleSpeed);
+  $('reset-zoom-btn').addEventListener('click', resetZoom);
+  document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+  $('live-body').addEventListener('click', e => {
+    const tr = e.target.closest('tr.motor');
+    if (tr && !tr.classList.contains('no-data')) toggleMotor(tr.dataset.id);
+  });
+  document.querySelector('#motor-table thead').addEventListener('click', e => {
+    const key = e.target.closest('th')?.dataset.key;
+    if (!key || !State.session) return;
+    tableSort.dir = tableSort.key === key ? -tableSort.dir : (key === 'name' || key === 'subsystem' ? 1 : -1);
+    tableSort.key = key;
+    renderMotorTable(State.session);
+  });
+  document.addEventListener('keydown', onKey);
+  $('brownouts-table').addEventListener('click', e => {
+    const t = e.target.closest('[data-time]')?.dataset.time;
+    if (t != null) showMoment(Number(t));
+  });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rebuildForTheme);
+
+  const example = new URLSearchParams(location.hash.slice(1)).get('example');
+  if (example) loadExample(example);
 }
+
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();

@@ -5,1110 +5,778 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TechPower</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600&display=swap" rel="stylesheet">
+    <script defer src="{{ url_for('static', filename='js/vendor/chart.umd.min.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/techpower.js') }}?v={{ version }}"></script>
     <style>
         :root {
-            --bg-base: #0b0e17;
-            --bg-surface: #111520;
-            --bg-card: #161b28;
-            --bg-raised: #1c2233;
-            --border: #232b3d;
-            --border-med: #2d3748;
-            --text-1: #e2e8f0;
-            --text-2: #94a3b8;
-            --text-3: #64748b;
-            --accent: #3b82f6;
-            --accent-glow: rgba(59, 130, 246, 0.15);
-            --green: #34d399;
-            --orange: #f97316;
-            --amber: #f59e0b;
-            --red: #ef4444;
-            --auto-col: #f59e0b;
-            --teleop-col: #3b82f6;
-            --disabled-col: #374151;
+            color-scheme: light;
+            --page: #eef0ec;
+            --surface: #fcfcfb;
+            --sunken: #e3e6e1;
+            --ink: #1b211e;
+            --ink-2: #4c5550;
+            --ink-3: #6f7872;
+            --rule: #d3d8d2;
+            --grid: rgba(27, 33, 30, 0.08);
+            --focus: #2a78d6;
+
+            --series-1: #2a78d6;
+            --series-2: #eb6834;
+            --series-3: #1baf7a;
+            --series-4: #6250d6;
+
+            --auto: rgba(237, 161, 0, 0.16);
+            --teleop: rgba(42, 120, 214, 0.10);
+            --disabled: rgba(27, 33, 30, 0.05);
+            --auto-solid: #c98500;
+            --teleop-solid: #2a78d6;
+            --disabled-solid: #a7aea9;
+
+            --warning: #b07a00;
+            --critical: #d03b3b;
+            --critical-bg: rgba(208, 59, 59, 0.08);
+
+            --num: 'Barlow Semi Condensed', 'Barlow', system-ui, sans-serif;
+            --radius: 6px;
         }
 
-        *,
-        *::before,
-        *::after {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                color-scheme: dark;
+                --page: #121413;
+                --surface: #1a1c1b;
+                --sunken: #232624;
+                --ink: #e9ece9;
+                --ink-2: #b8bfba;
+                --ink-3: #8b938e;
+                --rule: #2e322f;
+                --grid: rgba(233, 236, 233, 0.07);
+                --focus: #3987e5;
+                --series-1: #3987e5;
+                --series-2: #d95926;
+                --series-3: #199e70;
+                --series-4: #9085e9;
+                --auto: rgba(201, 133, 0, 0.20);
+                --teleop: rgba(57, 135, 229, 0.13);
+                --disabled: rgba(233, 236, 233, 0.04);
+                --auto-solid: #c98500;
+                --teleop-solid: #3987e5;
+                --disabled-solid: #4a504c;
+                --warning: #e0a526;
+                --critical: #e66767;
+                --critical-bg: rgba(230, 103, 103, 0.10);
+            }
         }
+
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+            --page: #121413;
+            --surface: #1a1c1b;
+            --sunken: #232624;
+            --ink: #e9ece9;
+            --ink-2: #b8bfba;
+            --ink-3: #8b938e;
+            --rule: #2e322f;
+            --grid: rgba(233, 236, 233, 0.07);
+            --focus: #3987e5;
+            --series-1: #3987e5;
+            --series-2: #d95926;
+            --series-3: #199e70;
+            --series-4: #9085e9;
+            --auto: rgba(201, 133, 0, 0.20);
+            --teleop: rgba(57, 135, 229, 0.13);
+            --disabled: rgba(233, 236, 233, 0.04);
+            --auto-solid: #c98500;
+            --teleop-solid: #3987e5;
+            --disabled-solid: #4a504c;
+            --warning: #e0a526;
+            --critical: #e66767;
+            --critical-bg: rgba(230, 103, 103, 0.10);
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            background: var(--bg-base);
-            color: var(--text-1);
-            font-family: 'DM Sans', system-ui, sans-serif;
+            background: var(--page);
+            color: var(--ink);
+            font: 15px/1.5 'Barlow', system-ui, sans-serif;
             min-height: 100vh;
-            font-size: 14px;
+            -webkit-font-smoothing: antialiased;
         }
 
-        /* ── App shell ── */
-        .app-header {
-            background: var(--bg-surface);
-            border-bottom: 1px solid var(--border);
-            padding: 0 24px;
-            height: 52px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 50;
-        }
+        [hidden] { display: none !important; }
 
-        .app-logo {
+        button { font: inherit; color: inherit; cursor: pointer; }
+
+        :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+        .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+        /* ── App bar ── */
+        .app-bar {
             display: flex;
-            align-items: center;
+            align-items: baseline;
             gap: 10px;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 700;
-            font-size: 15px;
-            letter-spacing: -0.02em;
-            color: var(--text-1);
+            padding: 14px 24px;
+            border-bottom: 1px solid var(--rule);
         }
 
-        .logo-icon {
-            width: 28px;
-            height: 28px;
-            background: linear-gradient(135deg, #3b82f6, #06b6d4);
-            border-radius: 7px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-        }
+        .wordmark { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+        .wordmark b { color: var(--series-2); font-weight: 600; }
+        .version { color: var(--ink-3); font-size: 13px; }
 
-        .version-badge {
-            font-size: 11px;
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--text-3);
-            background: var(--bg-raised);
-            border: 1px solid var(--border);
-            padding: 2px 8px;
-            border-radius: 20px;
-        }
-
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        /* ── Upload Panel ── */
-        #upload-panel {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: calc(100vh - 52px);
-            padding: 40px 24px;
-        }
-
-        .upload-inner {
-            width: 100%;
-            max-width: 640px;
-        }
-
-        .upload-headline {
-            text-align: center;
-            margin-bottom: 32px;
-        }
-
-        .upload-headline h1 {
-            font-size: 28px;
-            font-weight: 600;
-            letter-spacing: -0.03em;
-            color: var(--text-1);
-            margin-bottom: 8px;
-        }
-
-        .upload-headline p {
-            color: var(--text-2);
-            font-size: 14px;
-        }
-
-        #drop-zone {
-            border: 2px dashed var(--border-med);
-            border-radius: 14px;
-            background: var(--bg-surface);
-            padding: 48px 32px;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.2s, background 0.2s;
-            margin-bottom: 20px;
-        }
-
-        #drop-zone:hover,
-        #drop-zone.drag-over {
-            border-color: var(--accent);
-            background: rgba(59, 130, 246, 0.04);
-        }
-
-        .drop-icon {
-            width: 52px;
-            height: 52px;
-            background: var(--bg-raised);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 16px;
-            border: 1px solid var(--border);
-        }
-
-        .drop-icon svg {
-            stroke: var(--text-2);
-        }
-
-        .drop-title {
-            font-size: 16px;
+        /* ── Buttons ── */
+        .btn {
+            border: 1px solid var(--rule);
+            background: var(--surface);
+            border-radius: var(--radius);
+            padding: 7px 14px;
             font-weight: 500;
-            margin-bottom: 6px;
+            font-size: 14px;
         }
 
-        .drop-sub {
-            font-size: 13px;
-            color: var(--text-2);
-        }
-
-        .file-types {
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 14px;
-            flex-wrap: wrap;
-        }
-
-        .file-type-tag {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            color: var(--text-3);
-            background: var(--bg-raised);
-            border: 1px solid var(--border);
-            padding: 3px 10px;
-            border-radius: 20px;
-        }
-
-        #upload-status {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin: 12px 0;
-            min-height: 32px;
-        }
-
-        .file-chip {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            color: var(--text-2);
-            background: var(--bg-raised);
-            border: 1px solid var(--border);
-            padding: 5px 10px;
-            border-radius: 6px;
-            max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .file-chip svg {
-            flex-shrink: 0;
-            stroke: var(--text-3);
-        }
-
-        .error-msg {
-            color: var(--red);
-            font-size: 13px;
-            padding: 8px 12px;
-            background: rgba(239, 68, 68, 0.08);
-            border: 1px solid rgba(239, 68, 68, 0.2);
-            border-radius: 8px;
-            width: 100%;
-        }
-
-        .info-msg {
-            color: var(--text-2);
-            font-size: 13px;
-        }
-
-        #upload-progress {
-            display: none;
-            width: 100%;
-            height: 3px;
-            background: var(--border);
-            border-radius: 2px;
-            overflow: hidden;
-            margin: 12px 0;
-        }
-
-        #upload-progress::after {
-            content: '';
-            display: block;
-            height: 100%;
-            width: 30%;
-            background: var(--accent);
-            border-radius: 2px;
-            animation: progressSlide 1.2s ease-in-out infinite;
-        }
-
-        @keyframes progressSlide {
-            0% {
-                transform: translateX(-100%) scaleX(0.5);
-            }
-
-            50% {
-                transform: translateX(100%) scaleX(1.5);
-            }
-
-            100% {
-                transform: translateX(300%) scaleX(0.5);
-            }
-        }
+        .btn:hover:not(:disabled) { border-color: var(--ink-3); }
+        .btn:disabled { opacity: .5; cursor: default; }
 
         .btn-primary {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            padding: 10px 24px;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            width: 100%;
-            margin-bottom: 12px;
-            transition: opacity 0.15s;
-            font-family: inherit;
+            background: var(--ink);
+            color: var(--page);
+            border-color: var(--ink);
+            padding: 10px 20px;
         }
 
-        .btn-primary:hover {
-            opacity: 0.88;
+        .btn-primary:hover:not(:disabled) { border-color: var(--ink); opacity: .88; }
+
+        /* ── Upload view ── */
+        .upload {
+            max-width: 680px;
+            margin: 0 auto;
+            padding: 56px 24px 64px;
         }
 
-        .btn-primary:disabled {
-            opacity: 0.45;
-            cursor: default;
-        }
-
-        .btn-ghost {
-            background: transparent;
-            color: var(--text-2);
-            border: 1px solid var(--border);
-            padding: 8px 18px;
-            border-radius: 8px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: border-color 0.15s, color 0.15s;
-            font-family: inherit;
-        }
-
-        .btn-ghost:hover {
-            border-color: var(--accent);
-            color: var(--text-1);
-        }
-
-        .example-section {
-            margin-top: 24px;
-            text-align: center;
-        }
-
-        .example-label {
-            font-size: 12px;
-            color: var(--text-3);
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
+        .upload h1 {
+            font-size: 34px;
+            line-height: 1.15;
+            font-weight: 600;
+            letter-spacing: -0.02em;
             margin-bottom: 10px;
         }
 
-        .example-btns {
-            display: flex;
-            gap: 8px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
+        .lede { color: var(--ink-2); max-width: 58ch; margin-bottom: 28px; }
 
-        .example-btn {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            color: var(--text-2);
-            border: 1px solid var(--border);
-            background: var(--bg-raised);
-            padding: 6px 16px;
-            border-radius: 6px;
+        .drop {
+            display: block;
+            background: var(--surface);
+            border: 1.5px dashed var(--rule);
+            border-radius: 10px;
+            padding: 22px 22px 8px;
             cursor: pointer;
-            transition: border-color 0.15s, color 0.15s;
         }
 
-        .example-btn:hover {
-            border-color: var(--accent);
-            color: var(--text-1);
-        }
+        .drop:hover, .drop.drag-over { border-color: var(--ink-3); }
+        .drop.drag-over { background: var(--sunken); }
 
-        /* ── Dashboard Panel ── */
-        #dashboard-panel {
-            display: none;
-        }
+        .drop-title { font-weight: 500; margin-bottom: 14px; }
+        .drop-title u { text-underline-offset: 3px; }
 
-        .dash-header {
-            background: var(--bg-surface);
-            border-bottom: 1px solid var(--border);
-            padding: 12px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
+        .slots { list-style: none; }
 
-        .match-info h2 {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 17px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-
-        .match-info span {
-            font-size: 12px;
-            color: var(--text-3);
-        }
-
-        /* Summary cards */
-        .summary-cards-wrap {
-            padding: 16px 24px 0;
-        }
-
-        .summary-cards {
+        .slot {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 10px;
+            grid-template-columns: 18px 1fr auto;
+            gap: 4px 12px;
+            align-items: baseline;
+            padding: 12px 0;
+            border-top: 1px solid var(--rule);
         }
 
-        .summary-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 12px 14px;
-            transition: border-color 0.15s;
+        .slot-mark {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            border: 1.5px solid var(--ink-3);
+            align-self: center;
         }
 
-        .summary-card:hover {
-            border-color: var(--border-med);
-        }
+        .slot.filled .slot-mark { background: var(--series-3); border-color: var(--series-3); }
+        .slot-name { font-weight: 500; }
+        .slot-hint { color: var(--ink-3); font-size: 13px; }
 
-        .summary-card.card-warn {
-            border-color: rgba(239, 68, 68, 0.3);
-            background: rgba(239, 68, 68, 0.05);
-        }
-
-        .card-label {
-            font-size: 11px;
-            color: var(--text-3);
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
-            margin-bottom: 5px;
-        }
-
-        .card-value {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--text-1);
-        }
-
-        /* ── Time Bar ── */
-        .timebar-section {
-            padding: 16px 24px 8px;
-        }
-
-        .timebar-wrap {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px 14px;
-        }
-
-        .timebar-labels {
-            position: relative;
-            height: 18px;
-            margin-bottom: 3px;
-        }
-
-        .tb-marker {
-            position: absolute;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
-            color: var(--text-3);
-            transform: translateX(-50%);
-            user-select: none;
-        }
-
-        .timebar-track {
-            position: relative;
-            height: 20px;
-            background: var(--bg-raised);
-            border-radius: 5px;
-            cursor: pointer;
-            overflow: hidden;
-            user-select: none;
-            border: 1px solid var(--border);
-        }
-
-        .seg-track {
-            position: absolute;
-            inset: 0;
-        }
-
-        .seg-block {
-            position: absolute;
-            top: 0;
-            height: 100%;
-            opacity: 0.75;
-        }
-
-        .seg-auto {
-            background: var(--auto-col);
-        }
-
-        .seg-teleop {
-            background: var(--teleop-col);
-        }
-
-        .seg-disabled {
-            background: var(--disabled-col);
-        }
-
-        .brownout-layer {
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-        }
-
-        .brownout-tick {
-            position: absolute;
-            top: 0;
-            bottom: 0;
-            width: 3px;
-            background: var(--red);
-            opacity: 0.9;
-            border-radius: 1px;
-            transform: translateX(-50%);
-            z-index: 10;
-            animation: brownout-pulse 1.2s ease-in-out infinite;
-        }
-
-        @keyframes brownout-pulse {
-
-            0%,
-            100% {
-                opacity: 0.9;
-                box-shadow: 0 0 3px var(--red);
-            }
-
-            50% {
-                opacity: 0.5;
-                box-shadow: 0 0 8px var(--red);
-            }
-        }
-
-        /* Zoom overlay on timebar */
-        .timebar-zoom-overlay {
-            position: absolute;
-            top: 0;
-            bottom: 0;
-            background: rgba(59, 130, 246, 0.14);
-            border-left: 2px solid rgba(59, 130, 246, 0.6);
-            border-right: 2px solid rgba(59, 130, 246, 0.6);
-            pointer-events: none;
-            z-index: 5;
-            transition: left 0.04s, right 0.04s;
-        }
-
-        .timebar-cursor {
-            position: absolute;
-            top: -1px;
-            bottom: -1px;
-            width: 2px;
-            background: #fff;
-            border-radius: 1px;
-            z-index: 20;
-            pointer-events: none;
-            box-shadow: 0 0 6px rgba(255, 255, 255, 0.4);
-            transform: translateX(-50%);
-        }
-
-        .timebar-controls {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 8px;
-            flex-wrap: wrap;
-        }
-
-        .tb-btn {
-            background: var(--bg-raised);
-            border: 1px solid var(--border);
-            color: var(--text-1);
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            transition: border-color 0.15s;
-        }
-
-        .tb-btn:hover {
-            border-color: var(--accent);
-        }
-
-        .tb-time {
-            font-family: 'JetBrains Mono', monospace;
+        .slot-file {
+            grid-column: 2 / -1;
             font-size: 13px;
-            font-weight: 600;
-            color: var(--text-1);
-            min-width: 60px;
+            color: var(--ink-2);
+            overflow-wrap: anywhere;
         }
 
-        .tb-duration {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            color: var(--text-3);
-        }
+        .slot-file:empty { display: none; }
 
-        .tb-legend {
-            display: flex;
-            gap: 14px;
-            margin-left: auto;
-            flex-wrap: wrap;
-            align-items: center;
-        }
+        .upload-actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
 
-        .leg-item {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 11px;
-            color: var(--text-2);
-        }
+        .status { margin-top: 14px; font-size: 14px; color: var(--ink-2); min-height: 1.5em; }
+        .status.error { color: var(--critical); }
+        .status ul { margin: 4px 0 0 18px; }
 
-        .leg-swatch {
-            width: 10px;
-            height: 10px;
+        .busy-bar {
+            height: 3px;
             border-radius: 2px;
+            margin-top: 10px;
+            background: linear-gradient(90deg, transparent, var(--series-2), transparent) 0 0 / 40% 100% no-repeat var(--sunken);
+            animation: busy 1.2s linear infinite;
         }
 
-        .leg-auto {
-            background: var(--auto-col);
-        }
+        @keyframes busy { from { background-position: -40% 0; } to { background-position: 140% 0; } }
 
-        .leg-teleop {
-            background: var(--teleop-col);
-        }
+        .examples { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--rule); }
+        .examples h2 { font-size: 15px; font-weight: 500; color: var(--ink-2); margin-bottom: 10px; }
+        .example-btns { display: flex; flex-wrap: wrap; gap: 8px; }
 
-        .leg-disabled {
-            background: var(--disabled-col);
-        }
+        /* ── Dashboard ── */
+        .dash { padding: 0 24px 48px; max-width: 1600px; margin: 0 auto; }
 
-        .leg-brownout {
-            background: var(--red);
-        }
-
-        /* ── Tabs — centered and larger ── */
-        .tabs-section {
-            padding: 16px 24px 0;
-        }
-
-        .tabs {
+        .match-head {
             display: flex;
-            justify-content: center;
-            /* CENTER the tab row */
-            border-bottom: 1px solid var(--border);
-            gap: 4px;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            padding: 22px 0 14px;
         }
 
-        .tab-btn {
-            background: transparent;
-            border: none;
-            border-bottom: 2px solid transparent;
-            color: var(--text-3);
-            padding: 10px 32px;
-            /* bigger */
+        .match-head h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+        .match-meta { color: var(--ink-3); font-size: 14px; margin-top: 2px; }
+
+        .warnings {
+            list-style: none;
+            border-left: 3px solid var(--warning);
+            padding: 6px 12px;
+            margin-bottom: 14px;
             font-size: 14px;
-            /* larger text */
+            color: var(--ink-2);
+            background: var(--surface);
+        }
+
+        .readouts {
+            display: flex;
+            flex-wrap: wrap;
+            background: var(--surface);
+            border: 1px solid var(--rule);
+            border-radius: var(--radius);
+        }
+
+        .readout {
+            flex: 1 1 140px;
+            padding: 12px 18px 10px;
+            border-right: 1px solid var(--rule);
+        }
+
+        .readout:last-child { border-right: 0; }
+        .readout dt { font-size: 13px; color: var(--ink-3); }
+        .readout dd { font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 30px; font-weight: 600; line-height: 1.15; }
+        .readout dd small { font-size: 16px; font-weight: 500; color: var(--ink-3); margin-left: 2px; }
+        .readout.alarm { background: var(--critical-bg); }
+        .readout.alarm dd { color: var(--critical); }
+
+        /* ── Scrubber (sticky) ── */
+        .scrubber {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            background: var(--page);
+            padding: 14px 0 10px;
+            border-bottom: 1px solid var(--rule);
+        }
+
+        .track {
+            position: relative;
+            height: 30px;
+            border-radius: 4px;
+            background: var(--sunken);
+            overflow: hidden;
+            cursor: ew-resize;
+            touch-action: none;
+            user-select: none;
+        }
+
+        .seg { position: absolute; top: 0; bottom: 0; }
+        .seg-auto { background: var(--auto-solid); opacity: .55; }
+        .seg-teleop { background: var(--teleop-solid); opacity: .35; }
+        .seg-disabled { background: transparent; }
+
+        .brownout-tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--critical); }
+
+        .zoom-window {
+            position: absolute;
+            top: 0; bottom: 0;
+            box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .14);
+            border-left: 1px solid var(--ink-3);
+            border-right: 1px solid var(--ink-3);
+            pointer-events: none;
+        }
+
+        .track-cursor {
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 2px;
+            margin-left: -1px;
+            background: var(--ink);
+            pointer-events: none;
+        }
+
+        .ticks { position: relative; height: 16px; font-size: 12px; color: var(--ink-3); }
+        .ticks span { position: absolute; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
+        .ticks span:first-child { transform: none; }
+
+        .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+
+        .icon-btn {
+            width: 34px; height: 34px;
+            display: inline-grid;
+            place-items: center;
+            border-radius: var(--radius);
+            border: 1px solid var(--rule);
+            background: var(--surface);
+        }
+
+        .icon-btn svg { width: 14px; height: 14px; fill: currentColor; }
+
+        .clock { font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; min-width: 9ch; }
+        .clock small { color: var(--ink-3); font-weight: 500; font-size: 14px; }
+
+        .phase-pill { font-size: 13px; font-weight: 500; padding: 2px 9px; border-radius: 99px; background: var(--sunken); }
+        .phase-pill[data-phase="auto"] { background: var(--auto); }
+        .phase-pill[data-phase="teleop"] { background: var(--teleop); }
+
+        .legend { display: flex; gap: 14px; margin-left: auto; font-size: 13px; color: var(--ink-2); flex-wrap: wrap; align-items: center; }
+        .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+        .legend .hint { color: var(--ink-3); }
+
+        /* ── Tabs ── */
+        .tabs { display: flex; gap: 2px; margin: 18px 0 14px; border-bottom: 1px solid var(--rule); }
+
+        .tab {
+            background: none;
+            border: 0;
+            padding: 8px 14px 10px;
+            color: var(--ink-3);
             font-weight: 500;
-            cursor: pointer;
-            font-family: inherit;
-            transition: color 0.15s, border-color 0.15s;
+            border-bottom: 2px solid transparent;
             margin-bottom: -1px;
         }
 
-        .tab-btn:hover {
-            color: var(--text-1);
+        .tab:hover { color: var(--ink); }
+        .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+
+        /* ── Panels ── */
+        .panel { min-width: 0; }
+
+        .timeline-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 360px;
+            gap: 16px;
+            align-items: start;
         }
 
-        .tab-active {
-            color: #fff !important;
-            border-bottom-color: var(--accent) !important;
+        .stack { display: grid; gap: 12px; min-width: 0; }
+        .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--rule);
+            border-radius: var(--radius);
+            padding: 12px 14px;
+            min-width: 0;
         }
 
-        .tab-inactive {
-            color: var(--text-3);
-        }
+        .card h2 { font-size: 15px; font-weight: 600; }
+        .card h2 .unit { color: var(--ink-3); font-weight: 500; margin-left: 4px; }
+        .card .sub { font-size: 13px; color: var(--ink-3); margin: 1px 0 8px; }
 
-        /* ── Tab panels ── */
-        .tab-content {
-            padding: 16px 24px 32px;
-        }
+        .plot { position: relative; height: 180px; }
+        .plot.tall { height: 230px; }
 
-        .tab-panel {
+        .plot-cursor {
+            position: absolute;
+            width: 1.5px;
+            margin-left: -0.75px;
+            background: var(--ink);
+            opacity: .7;
+            pointer-events: none;
             display: none;
         }
 
-        /* Charts */
-        .chart-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 14px 16px;
-            margin-bottom: 14px;
-        }
+        .empty { color: var(--ink-3); font-size: 14px; padding: 18px 0; }
 
-        .chart-card-label {
-            font-size: 12px;
-            color: var(--text-3);
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
-            margin-bottom: 10px;
-        }
+        /* ── Live values ── */
+        .live { position: sticky; top: 150px; }
 
-        /* Energy panel */
-        .energy-grid {
-            display: grid;
-            grid-template-columns: 220px 1fr;
-            gap: 16px;
-        }
+        .live-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 
-        @media (max-width: 720px) {
-            .energy-grid {
-                grid-template-columns: 1fr;
-            }
-        }
+        .batt-now { display: flex; gap: 22px; margin-bottom: 10px; }
+        .batt-now div { font-size: 13px; color: var(--ink-3); }
+        .batt-now b { display: block; font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; color: var(--ink); }
 
-        .donut-wrap {
-            position: relative;
-            height: 200px;
-        }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th { text-align: right; font-weight: 500; color: var(--ink-3); font-size: 13px; padding: 6px 6px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+        th:first-child, td:first-child, #motor-table th:nth-child(2), #motor-table td:nth-child(2) { text-align: left; }
+        td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        tbody tr:last-child td { border-bottom: 0; }
 
-        .energy-total-center {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            flex-direction: column;
+        .group-row td { color: var(--ink-3); font-size: 13px; padding-top: 12px; }
+
+        .pick {
+            background: none;
+            border: 0;
+            padding: 0;
+            text-align: left;
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
+        }
+
+        .pick:disabled { cursor: default; color: var(--ink-3); }
+
+        .link-num {
+            background: none;
+            border: 0;
+            padding: 0;
+            font: inherit;
+            color: inherit;
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+            text-underline-offset: 4px;
+        }
+
+        .live tbody tr.motor { cursor: pointer; }
+        .live tbody tr.motor:hover td { background: var(--sunken); }
+        .live tbody tr.no-data { color: var(--ink-3); }
+
+        .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; border: 1.5px solid var(--rule); vertical-align: -1px; }
+        tr[aria-selected="true"] .swatch { border-color: transparent; }
+
+        .val-warn { color: var(--warning); font-weight: 600; }
+        .val-crit { color: var(--critical); font-weight: 600; }
+
+        /* ── Bar lists (energy, temperature) ── */
+        .bars { display: grid; gap: 4px; }
+
+        .bar-row {
+            display: grid;
+            grid-template-columns: minmax(110px, 200px) minmax(0, 1fr) 76px;
+            gap: 12px;
+            align-items: center;
+            font-size: 14px;
+            padding: 3px 0;
+        }
+
+        .bar-row .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .bar-row .label small { color: var(--ink-3); margin-left: 6px; }
+        .bar-row .value { text-align: right; font-family: var(--num); font-variant-numeric: tabular-nums; font-weight: 600; }
+        .bar-track { position: relative; height: 14px; background: var(--sunken); border-radius: 0 4px 4px 0; }
+        .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; }
+        .bar-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+        .bar-group { font-size: 13px; color: var(--ink-3); margin: 10px 0 2px; }
+
+        .energy-lede { font-size: 17px; max-width: 70ch; margin-bottom: 4px; }
+        .energy-lede b { font-family: var(--num); font-weight: 600; font-size: 20px; }
+
+        .key { display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); margin-top: 10px; flex-wrap: wrap; }
+        .key i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+
+        .brush {
+            position: absolute;
+            display: none;
+            background: rgba(42, 120, 214, 0.14);
+            border-left: 1px solid var(--focus);
+            border-right: 1px solid var(--focus);
             pointer-events: none;
         }
 
-        .energy-total-val {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 20px;
-            font-weight: 700;
+        .plot canvas { cursor: crosshair; touch-action: pan-y; }
+
+        .zoom-btns { display: inline-flex; gap: 4px; }
+        .zoom-btns .icon-btn { font-size: 18px; line-height: 1; }
+
+        .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; margin: 6px 0 4px; }
+        .facts dt { font-size: 13px; color: var(--ink-3); }
+        .facts dd { font-family: var(--num); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; }
+
+        #brownouts-table td.motors-cell { text-align: left; white-space: normal; }
+        #brownouts-table th:last-child { text-align: left; }
+        #brownouts-table .link-num { text-decoration-thickness: 1px; }
+
+        /* ── Motors table ── */
+        .sortable th { cursor: pointer; user-select: none; }
+        .sortable th:hover { color: var(--ink); }
+        .sortable th[aria-sort]::after { content: ' ▾'; }
+        .sortable th[aria-sort="ascending"]::after { content: ' ▴'; }
+
+        .badge { font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--sunken); color: var(--ink-2); }
+
+        .table-scroll { overflow-x: auto; }
+
+        @media (max-width: 1100px) {
+            .timeline-layout { grid-template-columns: minmax(0, 1fr); }
+            .live { position: static; }
         }
 
-        .energy-total-lbl {
-            font-size: 11px;
-            color: var(--text-3);
+        @media (max-width: 720px) {
+            .app-bar, .dash { padding-left: 16px; padding-right: 16px; }
+            .grid-2 { grid-template-columns: minmax(0, 1fr); }
+            .readout { flex-basis: 45%; border-bottom: 1px solid var(--rule); }
+            .readout dd { font-size: 24px; }
+            .legend .hint { display: none; }
+            .live { overflow-x: auto; }
+            .live td, .live th { padding-left: 4px; padding-right: 4px; }
+            .bar-row { grid-template-columns: 110px minmax(0, 1fr) 64px; }
+            .upload { padding-top: 32px; }
+            .upload h1 { font-size: 28px; }
         }
 
-        #energy-legend {
-            margin-top: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .energy-leg-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-        }
-
-        .energy-leg-swatch {
-            width: 10px;
-            height: 10px;
-            border-radius: 2px;
-            flex-shrink: 0;
-        }
-
-        .energy-leg-val {
-            margin-left: auto;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            color: var(--text-2);
-        }
-
-        /* Heatmap */
-        .heatmap-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 10px;
-            margin-bottom: 16px;
-        }
-
-        .heat-cell {
-            background: var(--bg-raised);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 10px 12px;
-            transition: transform 0.15s;
-            cursor: default;
-        }
-
-        .heat-cell:hover {
-            transform: scale(1.02);
-        }
-
-        .heat-cell.temp-warn {
-            border-color: rgba(245, 158, 11, 0.4);
-        }
-
-        .heat-cell.temp-crit {
-            border-color: rgba(239, 68, 68, 0.5);
-        }
-
-        .heat-name {
-            font-size: 11px;
-            color: var(--text-2);
-            margin-bottom: 4px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .heat-temp {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 17px;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }
-
-        .heat-bar {
-            height: 3px;
-            background: var(--border);
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .heat-bar-fill {
-            height: 100%;
-            border-radius: 2px;
-            transition: width 0.3s ease;
-        }
-
-        .heatmap-legend {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 11px;
-            color: var(--text-3);
-        }
-
-        .heatmap-gradient {
-            flex: 1;
-            height: 6px;
-            border-radius: 3px;
-            background: linear-gradient(to right, #3b82f6, #f59e0b, #ef4444);
-        }
-
-        /* Detail table */
-        .table-wrap {
-            overflow-x: auto;
-            border-radius: 10px;
-            border: 1px solid var(--border);
-        }
-
-        .detail-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-        }
-
-        .detail-table th {
-            background: var(--bg-raised);
-            color: var(--text-3);
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.07em;
-            font-weight: 500;
-            padding: 10px 14px;
-            text-align: left;
-            border-bottom: 1px solid var(--border);
-            white-space: nowrap;
-        }
-
-        .detail-table td {
-            padding: 9px 14px;
-            border-bottom: 1px solid rgba(35, 43, 61, 0.6);
-            color: var(--text-2);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-        }
-
-        .detail-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .detail-table tr:hover td {
-            background: rgba(59, 130, 246, 0.04);
-        }
-
-        .motor-name {
-            font-weight: 500;
-            color: var(--text-1) !important;
-            font-family: 'DM Sans', sans-serif !important;
-            font-size: 13px !important;
-        }
-
-        .subsys-badge {
-            font-family: 'DM Sans', sans-serif;
-            font-size: 11px;
-            font-weight: 500;
-            padding: 3px 8px;
-            border-radius: 20px;
-            white-space: nowrap;
-        }
-
-        .val-warn {
-            color: var(--amber) !important;
-        }
-
-        .val-crit {
-            color: var(--red) !important;
-        }
-
-        /* Empty states */
-        .empty-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 48px 24px;
-            color: var(--text-3);
-            text-align: center;
-        }
-
-        .empty-state svg {
-            margin-bottom: 12px;
-            opacity: 0.4;
-        }
-
-        .empty-state p {
-            font-size: 14px;
-        }
-
-        /* Scrollbar */
-        ::-webkit-scrollbar {
-            width: 5px;
-            height: 5px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: var(--bg-base);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: var(--border-med);
-            border-radius: 3px;
+        @media (prefers-reduced-motion: reduce) {
+            .busy-bar { animation: none; background: var(--series-2); opacity: .5; }
         }
     </style>
 </head>
 
 <body>
-
-    <!-- App header -->
-    <header class="app-header">
-        <div class="app-logo">
-            <div class="logo-icon">⚡</div>
-            TechPower
-            <span class="version-badge">v1.2.0</span>
-        </div>
-        <div class="header-actions">
-            <div id="dash-header-actions" style="display:none">
-                <button class="btn-ghost" onclick="newSession()">← New Session</button>
-            </div>
-        </div>
+    <header class="app-bar">
+        <span class="wordmark">Tech<b>Power</b></span>
+        <span class="version">v{{ version }}</span>
     </header>
 
-    <!-- ── Upload Panel ── -->
-    <div id="upload-panel">
-        <div class="upload-inner">
-            <div class="upload-headline">
-                <h1>FRC Power Analysis</h1>
-                <p>Drop your match logs to visualize battery, motor current, temperature and energy usage.</p>
-            </div>
+    <!-- ── Upload ── -->
+    <main id="upload-view" class="upload" data-prefix-map='{{ prefix_map | tojson }}'>
+        <h1>Review a match's power use</h1>
+        <p class="lede">Add the robot log and both CANivore logs from one match. TechPower lines them up and shows
+            battery sag, brownouts, motor current, temperature and where the energy went.</p>
 
-            <div id="drop-zone">
-                <div class="drop-icon">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="17 8 12 3 7 8" />
-                        <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
-                </div>
-                <div class="drop-title">Drop log files here</div>
-                <div class="drop-sub">or click to browse</div>
-                <div class="file-types">
-                    <span class="file-type-tag">FRC_*.wpilog</span>
-                    <span class="file-type-tag">*_CC*.hoot.wpilog</span>
-                    <span class="file-type-tag">*_01*.hoot.wpilog</span>
-                </div>
-                <input type="file" id="file-input" multiple accept=".wpilog" style="display:none">
-            </div>
+        <label id="drop-zone" class="drop">
+            <input type="file" id="file-input" multiple accept=".wpilog" hidden>
+            <div class="drop-title">Drop .wpilog files here or <u>browse</u></div>
+            <ul class="slots">
+                <li class="slot" data-role="main">
+                    <span class="slot-mark"></span><span class="slot-name">Robot log</span>
+                    <span class="slot-hint">FRC_*.wpilog, required</span>
+                    <span class="slot-file"></span>
+                </li>
+                <li class="slot" data-role="swerve">
+                    <span class="slot-mark"></span><span class="slot-name">Swerve CANivore</span>
+                    <span class="slot-hint">*_CC….hoot.wpilog</span>
+                    <span class="slot-file"></span>
+                </li>
+                <li class="slot" data-role="subsystems">
+                    <span class="slot-mark"></span><span class="slot-name">Subsystems CANivore</span>
+                    <span class="slot-hint">*_01….hoot.wpilog</span>
+                    <span class="slot-file"></span>
+                </li>
+            </ul>
+        </label>
 
-            <div id="upload-status"></div>
-            <div id="upload-progress"></div>
-            <button class="btn-primary" id="analyze-btn"
-                onclick="uploadFiles(Array.from(document.getElementById('file-input').files))">Analyze</button>
-
-            <div class="example-section">
-                <div class="example-label">Try an example</div>
-                <div class="example-btns">
-                    {% for session in example_sessions %}
-                    <button class="example-btn" onclick="loadExample('{{ session.id }}')">{{ session.name }}</button>
-                    {% endfor %}
-                </div>
-            </div>
+        <div class="upload-actions">
+            <button class="btn btn-primary" id="analyze-btn" disabled>Analyze match</button>
+            <button class="btn" id="clear-btn" hidden>Clear files</button>
         </div>
-    </div>
+        <div id="upload-status" class="status" role="status" aria-live="polite"></div>
 
-    <!-- ── Dashboard Panel ── -->
-    <div id="dashboard-panel">
-
-        <div class="dash-header">
-            <div class="match-info">
-                <h2 id="match-title">Match</h2>
-                <span id="match-meta"></span>
+        {% if example_sessions %}
+        <section class="examples">
+            <h2>Or open an example match</h2>
+            <div class="example-btns">
+                {% for session in example_sessions %}
+                <button class="btn example-btn" data-example="{{ session.id }}">{{ session.name }}</button>
+                {% endfor %}
             </div>
-            <button class="btn-ghost" onclick="newSession()">← New Session</button>
-        </div>
+        </section>
+        {% endif %}
+    </main>
 
-        <div class="summary-cards-wrap">
-            <div class="summary-cards" id="summary-cards"></div>
+    <!-- ── Dashboard ── -->
+    <main id="dashboard-view" class="dash" hidden>
+        <div class="match-head">
+            <div>
+                <h1 id="match-title">Match</h1>
+                <p class="match-meta" id="match-meta"></p>
+            </div>
+            <button class="btn" id="new-session-btn">Open another match</button>
         </div>
 
-        <div class="timebar-section">
-            <div id="time-bar-container"></div>
-        </div>
+        <ul class="warnings" id="warnings" hidden></ul>
 
-        <!-- Tabs — centered via CSS -->
-        <div class="tabs-section">
-            <div class="tabs">
-                <button class="tab-btn tab-active" data-tab="timeline">Timeline</button>
-                <button class="tab-btn tab-inactive" data-tab="energy">Energy</button>
-                <button class="tab-btn tab-inactive" data-tab="heatmap">Temperature</button>
-                <button class="tab-btn tab-inactive" data-tab="table">Motors</button>
+        <dl class="readouts" id="readouts"></dl>
+
+        <section class="scrubber" aria-label="Match timeline">
+            <div class="track" id="track" role="slider" tabindex="0" aria-label="Match time"
+                aria-valuemin="0" aria-valuenow="0">
+                <div id="track-segments"></div>
+                <div id="track-brownouts"></div>
+                <div class="zoom-window" id="zoom-window"></div>
+                <div class="track-cursor" id="track-cursor"></div>
             </div>
-        </div>
-
-        <div class="tab-content">
-
-            <!-- TIMELINE TAB -->
-            <!-- Extra chart cards (stator current, supply current, temp) are injected
-             here by ensureTimelineCanvases() in JS before renderTimelineCharts() -->
-            <div class="tab-panel" data-panel="timeline" id="panel-timeline">
-                <div class="chart-card">
-                    <div class="chart-card-label">Battery Voltage</div>
-                    <div style="position:relative;height:200px">
-                        <canvas id="chart-voltage" role="img" aria-label="Battery voltage over match time"></canvas>
-                    </div>
+            <div class="ticks" id="ticks"></div>
+            <div class="controls">
+                <button class="icon-btn" id="play-btn" aria-label="Play">
+                    <svg viewBox="0 0 16 16" id="play-icon"><path d="M4 2.5v11l9-5.5z" /></svg>
+                </button>
+                <button class="btn" id="speed-btn" title="Playback speed">1×</button>
+                <span class="clock" id="clock">0.00 <small>s</small></span>
+                <span class="phase-pill" id="phase-pill">Disabled</span>
+                <span class="zoom-btns">
+                    <button class="icon-btn" id="zoom-out-btn" aria-label="Zoom out" title="Zoom out (−)">−</button>
+                    <button class="icon-btn" id="zoom-in-btn" aria-label="Zoom in" title="Zoom in (+)">+</button>
+                </span>
+                <button class="btn" id="reset-zoom-btn" hidden>Show whole match</button>
+                <div class="legend">
+                    <span><i style="background:var(--auto-solid);opacity:.55"></i>Auto</span>
+                    <span><i style="background:var(--teleop-solid);opacity:.35"></i>Teleop</span>
+                    <span><i style="background:var(--critical)"></i>Brownout</span>
+                    <span class="hint">Drag across a chart to zoom. Double-click or Esc to zoom out. Space plays.</span>
                 </div>
-                <div class="chart-card">
-                    <div class="chart-card-label">Battery Current</div>
-                    <div style="position:relative;height:200px">
-                        <canvas id="chart-current" role="img"
-                            aria-label="Battery current draw over match time"></canvas>
-                    </div>
-                </div>
-                <!-- chart-stator, chart-supply, chart-temp, live-table-card injected by JS -->
             </div>
+        </section>
 
-            <!-- ENERGY TAB -->
-            <div class="tab-panel" data-panel="energy">
-                <div class="chart-card">
-                    <div class="chart-card-label">Energy by Subsystem</div>
-                    <div class="energy-grid">
-                        <div>
-                            <div class="donut-wrap">
-                                <canvas id="chart-energy-donut" role="img"
-                                    aria-label="Energy consumption by subsystem"></canvas>
-                                <div class="energy-total-center">
-                                    <div class="energy-total-val" id="total-wh-display">–</div>
-                                    <div class="energy-total-lbl">Total Wh</div>
-                                </div>
-                            </div>
-                            <div id="energy-legend"></div>
+        <nav class="tabs" role="tablist">
+            <button class="tab" role="tab" data-tab="timeline" aria-selected="true">Timeline</button>
+            <button class="tab" role="tab" data-tab="brownouts" aria-selected="false">Brownouts</button>
+            <button class="tab" role="tab" data-tab="energy" aria-selected="false">Energy</button>
+            <button class="tab" role="tab" data-tab="temperature" aria-selected="false">Temperature</button>
+            <button class="tab" role="tab" data-tab="motors" aria-selected="false">Motors</button>
+        </nav>
+
+        <!-- Timeline -->
+        <section class="panel timeline-layout" data-panel="timeline" role="tabpanel">
+            <div class="stack">
+                <div class="card">
+                    <h2>Battery voltage<span class="unit">V</span></h2>
+                    <div class="plot tall"><canvas id="chart-voltage"></canvas></div>
+                </div>
+                <div class="card">
+                    <h2>Current draw<span class="unit">A</span></h2>
+                    <p class="sub">Whole robot from the PDH, and the summed supply current of each CANivore bus.</p>
+                    <div class="plot"><canvas id="chart-current"></canvas></div>
+                </div>
+                <div id="motor-charts">
+                    <p class="sub" id="motor-pick-hint">Comparing the selected motors. Pick up to four in Values at cursor.</p>
+                    <div class="grid-2">
+                        <div class="card">
+                            <h2>Supply current<span class="unit">A</span></h2>
+                            <div class="plot"><canvas id="chart-supply"></canvas></div>
                         </div>
-                        <div style="position:relative;height:240px">
-                            <canvas id="chart-energy-segments" role="img"
-                                aria-label="Energy consumption by match segment"></canvas>
+                        <div class="card">
+                            <h2>Stator current<span class="unit">A</span></h2>
+                            <div class="plot"><canvas id="chart-stator"></canvas></div>
                         </div>
-                    </div>
-                </div>
-                <!-- chart-energy-stator-v and chart-energy-supply injected by JS -->
-            </div>
-
-            <!-- HEATMAP TAB -->
-            <div class="tab-panel" data-panel="heatmap">
-                <div class="chart-card">
-                    <div class="chart-card-label">Motor Peak Temperature</div>
-                    <div id="heatmap-container">
-                        <div class="empty-state">
-                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="1.5">
-                                <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
-                            </svg>
-                            <p>Temperature data requires hoot logs</p>
+                        <div class="card">
+                            <h2>Applied motor voltage<span class="unit">V</span></h2>
+                            <div class="plot"><canvas id="chart-motor-voltage"></canvas></div>
+                        </div>
+                        <div class="card">
+                            <h2>Temperature<span class="unit">°C</span></h2>
+                            <div class="plot"><canvas id="chart-temp"></canvas></div>
                         </div>
                     </div>
                 </div>
+                <p class="empty card" id="no-motor-data" hidden>No motor data. Add the CANivore hoot logs to see
+                    per-motor current and temperature.</p>
             </div>
 
-            <!-- TABLE TAB -->
-            <div class="tab-panel" data-panel="table">
-                <div id="detail-table-container">
-                    <div class="empty-state">
-                        <p>No motor data available</p>
-                    </div>
+            <aside class="card live" aria-label="Values at cursor">
+                <div class="live-head">
+                    <h2>Values at cursor</h2>
+                    <span class="num" id="live-time"></span>
+                </div>
+                <div class="batt-now">
+                    <div>Battery<b id="live-batt-v">–</b></div>
+                    <div>Robot draw<b id="live-batt-a">–</b></div>
+                </div>
+                <table>
+                    <thead><tr><th>Motor</th><th>Supply A</th><th>Stator A</th><th>°C</th></tr></thead>
+                    <tbody id="live-body"></tbody>
+                </table>
+            </aside>
+        </section>
+
+        <!-- Brownouts -->
+        <section class="panel" data-panel="brownouts" role="tabpanel" hidden>
+            <div class="card table-scroll">
+                <p class="energy-lede" id="brownout-summary"></p>
+                <p class="sub">The roboRIO cuts motor output when battery voltage drops too far. Each row shows
+                    how deep the dip went and which motors drew the most supply current within half a second of it.
+                    Select a time to see it on the timeline.</p>
+                <table id="brownouts-table">
+                    <thead><tr><th>Time</th><th>Length</th><th>Lowest voltage</th><th>Robot draw</th><th>Biggest supply draws</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Energy -->
+        <section class="panel stack" data-panel="energy" role="tabpanel" hidden>
+            <div class="card">
+                <p class="energy-lede" id="energy-lede"></p>
+            </div>
+            <div class="grid-2">
+                <div class="card">
+                    <h2>Battery</h2>
+                    <p class="sub">Fitted from how far voltage sags under load. Resistance includes the main wiring
+                        and breaker, so compare it across matches: a battery that reads noticeably higher is worn or
+                        not fully charged.</p>
+                    <dl class="facts" id="battery-facts"></dl>
+                    <p class="sub" id="battery-note">Not enough load in this log to estimate the battery.</p>
+                </div>
+                <div class="card">
+                    <h2>By match phase<span class="unit">Wh</span></h2>
+                    <p class="sub">Whole-robot energy from battery voltage × PDH current.</p>
+                    <div class="bars" id="energy-phases"></div>
                 </div>
             </div>
+            <div class="card">
+                    <h2>By motor<span class="unit">Wh</span></h2>
+                    <p class="sub">Net energy each motor drew. Regenerative braking counts against it.</p>
+                    <div class="bars" id="energy-motors"></div>
+            </div>
+        </section>
 
-        </div><!-- /tab-content -->
-    </div><!-- /dashboard-panel -->
+        <!-- Temperature -->
+        <section class="panel" data-panel="temperature" role="tabpanel" hidden>
+            <div class="card">
+                <h2>Motor temperature<span class="unit">°C</span></h2>
+                <p class="sub">Bar shows the peak; the dark mark is the match average.</p>
+                <div class="bars" id="temp-bars"></div>
+                <div class="key">
+                    <span><i style="background:var(--series-3)"></i>Under 70 °C</span>
+                    <span><i style="background:var(--warning)"></i>70–90 °C</span>
+                    <span><i style="background:var(--critical)"></i>90 °C and up</span>
+                </div>
+                <p class="sub" id="temp-missing" style="margin-top:12px"></p>
+            </div>
+        </section>
 
-    <script src="/static/js/techpower.js"></script>
-    <script>
-        // Keep dash-header-actions in sync with dashboard visibility
-        const _dashObserver = new MutationObserver(() => {
-            const visible = document.getElementById('dashboard-panel').style.display !== 'none';
-            document.getElementById('dash-header-actions').style.display = visible ? 'block' : 'none';
-        });
-        _dashObserver.observe(document.getElementById('dashboard-panel'), { attributes: true });
-    </script>
+        <!-- Motors -->
+        <section class="panel" data-panel="motors" role="tabpanel" hidden>
+            <div class="card table-scroll">
+                <table class="sortable" id="motor-table">
+                    <thead>
+                        <tr>
+                            <th data-key="name">Motor</th>
+                            <th data-key="subsystem">Subsystem</th>
+                            <th data-key="channel">PDH ch</th>
+                            <th data-key="peak_supply_current">Peak supply A</th>
+                            <th data-key="avg_supply_current">Avg supply A</th>
+                            <th data-key="rms_supply_current" title="Root-mean-square supply current: what heats wiring and breakers">RMS supply A</th>
+                            <th data-key="over_breaker_s" title="Seconds above the breaker rating">Over breaker s</th>
+                            <th data-key="peak_stator_current">Peak stator A</th>
+                            <th data-key="max_temp">Max °C</th>
+                            <th data-key="avg_temp">Avg °C</th>
+                            <th data-key="energy_wh" aria-sort="descending">Energy Wh</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
 </body>
 
 </html>

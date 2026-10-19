@@ -1,24 +1,29 @@
 """
-WPILog parser — reads DogLog/Epilogue .wpilog binary format.
+WPILog parser — reads DogLog/Epilogue/Phoenix .wpilog binary format.
 Format spec: https://github.com/wpilibsuite/allwpilib/blob/main/wpiutil/doc/datalog.md
-"""
-import struct, math
-from dataclasses import dataclass, field
-from typing import Any
 
-ENTRY_TYPES = {
-    0x00: "raw",
-    0x01: "boolean",
-    0x02: "integer",
-    0x03: "float",
-    0x04: "double",
-    0x05: "string",
-    0x10: "boolean[]",
-    0x11: "integer[]",
-    0x12: "float[]",
-    0x13: "double[]",
-    0x14: "string[]",
+Only entries accepted by `wanted(name)` have their records decoded; everything
+else is skipped by header, which keeps large hoot logs fast to load.
+"""
+import struct
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+import numpy as np
+
+# Numeric scalar types decoded in bulk with numpy: type → (dtype, byte width)
+_NUMERIC = {
+    "double":  ("<f8", 8),
+    "float":   ("<f4", 4),
+    "int64":   ("<i8", 8),
+    "boolean": ("u1", 1),
 }
+
+# Header layout per bitfield byte: (entry id len, payload size len, timestamp len)
+_HEADER = [((b & 3) + 1, ((b >> 2) & 3) + 1, ((b >> 4) & 7) + 1) for b in range(256)]
+
+LFS_POINTER_PREFIX = b"version https://git-lfs"
+
 
 @dataclass
 class WPILogEntry:
@@ -26,167 +31,119 @@ class WPILogEntry:
     name: str
     type_str: str
     metadata: str
-    records: list = field(default_factory=list)  # [(timestamp_us, value), ...]
+    times: np.ndarray = field(default_factory=lambda: np.empty(0))   # seconds
+    values: Any = field(default_factory=lambda: np.empty(0))          # ndarray for numeric, list otherwise
+
+    def __len__(self):
+        return len(self.times)
 
 
-def _read_leb128(buf, pos):
-    result, shift = 0, 0
-    while True:
-        b = buf[pos]; pos += 1
-        result |= (b & 0x7F) << shift
-        if not (b & 0x80):
-            break
-        shift += 7
-    return result, pos
-
-
-def parse_wpilog(filepath: str) -> dict[str, WPILogEntry]:
-    """Returns dict of entry_name -> WPILogEntry with all records."""
+def parse_wpilog(filepath: str, wanted: Callable[[str], bool] | None = None) -> dict[str, WPILogEntry]:
+    """Return {entry name: WPILogEntry}. Records are decoded only for wanted entries."""
     with open(filepath, "rb") as f:
         data = f.read()
 
-    if data[:6] != b"WPILOG":
+    if data.startswith(LFS_POINTER_PREFIX):
+        raise ValueError(f"{filepath} is a Git LFS pointer, not a log. Run `git lfs pull`.")
+    if data[:6] != b"WPILOG" or len(data) < 12:
         raise ValueError("Not a valid WPILog file")
 
-    version = struct.unpack_from("<H", data, 6)[0]
-    extra_header_len = struct.unpack_from("<I", data, 8)[0]
-    pos = 12 + extra_header_len
+    pos = 12 + int.from_bytes(data[8:12], "little")
+    n = len(data)
+    fb = int.from_bytes
 
     entries_by_id: dict[int, WPILogEntry] = {}
     entries_by_name: dict[str, WPILogEntry] = {}
+    # entry name → ([timestamp_us], [payload offset], [payload size]) for wanted entries
+    raw: dict[str, tuple[list, list, list]] = {}
+    raw_by_id: dict[int, tuple[list, list, list]] = {}
 
-    while pos < len(data):
-        if pos + 4 > len(data):
-            break
-        # Record header: bitfield (1), entry_id (1-4), payload_size (1-4), timestamp (1-8)
-        bitfield = data[pos]; pos += 1
-        entry_id_len  = (bitfield & 0x03) + 1
-        payload_len   = ((bitfield >> 2) & 0x03) + 1
-        timestamp_len = ((bitfield >> 4) & 0x07) + 1
-
-        entry_id  = int.from_bytes(data[pos:pos+entry_id_len],  "little"); pos += entry_id_len
-        payload_size = int.from_bytes(data[pos:pos+payload_len], "little"); pos += payload_len
-        timestamp_us = int.from_bytes(data[pos:pos+timestamp_len], "little"); pos += timestamp_len
-
-        payload = data[pos:pos+payload_size]; pos += payload_size
+    while pos < n:
+        il, pl, tl = _HEADER[data[pos]]
+        hdr_end = pos + 1 + il + pl + tl
+        if hdr_end > n:
+            break  # truncated header at end of file
+        p = pos + 1
+        entry_id = fb(data[p:p + il], "little"); p += il
+        size = fb(data[p:p + pl], "little"); p += pl
+        payload_end = hdr_end + size
+        if payload_end > n:
+            break  # truncated payload (log cut off mid-write)
 
         if entry_id == 0:
-            # Control record
-            ctrl_type = payload[0]
-            if ctrl_type == 0:  # Start record
-                rec_entry_id = struct.unpack_from("<I", payload, 1)[0]
-                name_len = struct.unpack_from("<I", payload, 5)[0]
-                name = payload[9:9+name_len].decode("utf-8", errors="replace")
-                p2 = 9 + name_len
-                type_len = struct.unpack_from("<I", payload, p2)[0]; p2 += 4
-                type_str = payload[p2:p2+type_len].decode("utf-8", errors="replace"); p2 += type_len
-                meta_len = struct.unpack_from("<I", payload, p2)[0]; p2 += 4
-                metadata = payload[p2:p2+meta_len].decode("utf-8", errors="replace")
-                entry = WPILogEntry(rec_entry_id, name, type_str, metadata)
-                entries_by_id[rec_entry_id] = entry
-                entries_by_name[name] = entry
+            if size and data[hdr_end] == 0:  # start record
+                entry = _parse_start(data, hdr_end + 1)
+                if entry is not None:
+                    existing = entries_by_name.get(entry.name)
+                    if existing is None:
+                        entries_by_name[entry.name] = existing = entry
+                    entries_by_id[entry.entry_id] = existing
+                    if wanted is None or wanted(entry.name):
+                        raw_by_id[entry.entry_id] = raw.setdefault(entry.name, ([], [], []))
+                    else:
+                        raw_by_id.pop(entry.entry_id, None)
         else:
-            if entry_id not in entries_by_id:
-                continue
-            entry = entries_by_id[entry_id]
-            value = _decode_value(payload, entry.type_str)
-            if value is not None:
-                entry.records.append((timestamp_us / 1_000_000.0, value))
+            buf = raw_by_id.get(entry_id)
+            if buf is not None:
+                buf[0].append(fb(data[p:p + tl], "little"))
+                buf[1].append(hdr_end)
+                buf[2].append(size)
+        pos = payload_end
+
+    arr = np.frombuffer(data, dtype=np.uint8)
+    for name, (ts, offs, sizes) in raw.items():
+        entry = entries_by_name[name]
+        entry.times, entry.values = _decode(arr, data, entry.type_str, ts, offs, sizes)
 
     return entries_by_name
 
 
-def _decode_value(payload: bytes, type_str: str) -> Any:
+def _parse_start(data: bytes, p: int) -> WPILogEntry | None:
     try:
-        if type_str == "boolean":
-            return bool(payload[0])
-        elif type_str == "double":
-            return struct.unpack_from("<d", payload)[0]
-        elif type_str == "float":
-            return struct.unpack_from("<f", payload)[0]
-        elif type_str == "integer" or type_str == "int64":
-            return struct.unpack_from("<q", payload)[0]
-        elif type_str == "string":
-            return payload.decode("utf-8", errors="replace")
-        elif type_str == "double[]":
-            n = len(payload) // 8
-            return list(struct.unpack_from(f"<{n}d", payload))
-        elif type_str == "float[]":
-            n = len(payload) // 4
-            return list(struct.unpack_from(f"<{n}f", payload))
-    except Exception:
-        pass
+        entry_id, name_len = struct.unpack_from("<II", data, p); p += 8
+        name = data[p:p + name_len].decode("utf-8", "replace"); p += name_len
+        type_len = struct.unpack_from("<I", data, p)[0]; p += 4
+        type_str = data[p:p + type_len].decode("utf-8", "replace"); p += type_len
+        meta_len = struct.unpack_from("<I", data, p)[0]; p += 4
+        metadata = data[p:p + meta_len].decode("utf-8", "replace")
+    except struct.error:
+        return None
+    return WPILogEntry(entry_id, name, type_str, metadata)
+
+
+def _decode(arr: np.ndarray, data: bytes, type_str: str, ts: list, offs: list, sizes: list):
+    times = np.asarray(ts, dtype=np.float64) / 1e6
+    if not ts:
+        return times, np.empty(0)
+
+    num = _NUMERIC.get("int64" if type_str == "integer" else type_str)
+    if num is not None:
+        dtype, width = num
+        offs_a = np.asarray(offs, dtype=np.int64)
+        ok = np.asarray(sizes) >= width
+        raw = arr[offs_a[ok, None] + np.arange(width)]
+        values = raw.view(dtype).ravel().astype(np.float64)
+        return times[ok], values
+
+    values = []
+    keep = []
+    for i, (o, s) in enumerate(zip(offs, sizes)):
+        v = _decode_value(data[o:o + s], type_str)
+        if v is not None:
+            values.append(v)
+            keep.append(i)
+    return times[keep], values
+
+
+def _decode_value(payload: bytes, type_str: str) -> Any:
+    if type_str == "string":
+        return payload.decode("utf-8", errors="replace")
+    if type_str == "double[]":
+        return list(struct.unpack(f"<{len(payload) // 8}d", payload[:len(payload) // 8 * 8]))
+    if type_str == "float[]":
+        return list(struct.unpack(f"<{len(payload) // 4}f", payload[:len(payload) // 4 * 4]))
+    if type_str in ("int64[]", "integer[]"):
+        return list(struct.unpack(f"<{len(payload) // 8}q", payload[:len(payload) // 8 * 8]))
+    if type_str == "boolean[]":
+        return [bool(b) for b in payload]
     return None
-
-
-def extract_battery_data(entries: dict, config: dict) -> dict:
-    """Extract battery voltage, current, brownout, match mode from wpilog entries."""
-    keys = config["log_sources"]["wpilog"]["keys"]
-    alt = keys.get("alternate_keys", {})
-
-    def find_key(primary, field_name):
-        if primary in entries:
-            return entries[primary].records
-        for alt_key in alt.get(field_name, []):
-            if alt_key in entries:
-                return entries[alt_key].records
-        # fuzzy search
-        low = primary.lower().split("/")[-1]
-        for name, entry in entries.items():
-            if name.lower().endswith(low):
-                return entry.records
-        return []
-
-    voltage_records = find_key(keys["battery_voltage"], "battery_voltage")
-    current_records = find_key(keys["battery_current"], "battery_current")
-    brownout_records = find_key(keys["brownout"], "brownout")
-    enabled_records  = find_key(keys["enabled"], "enabled")
-    auton_records    = find_key(keys["autonomous"], "autonomous")
-
-    brownout_times = [t for t, v in brownout_records if v]
-
-    return {
-        "voltage": voltage_records,
-        "current": current_records,
-        "brownout_times": brownout_times,
-        "enabled": enabled_records,
-        "autonomous": auton_records,
-    }
-
-
-def build_match_segments(battery_data: dict) -> list[dict]:
-    """Build auton/teleop/disabled segments for timeline coloring."""
-    enabled = {t: v for t, v in battery_data["enabled"]}
-    auton   = {t: v for t, v in battery_data["autonomous"]}
-    if not enabled:
-        return []
-
-    times = sorted(set(list(enabled.keys()) + list(auton.keys())))
-    if not times:
-        return []
-
-    segments = []
-    prev_mode = None
-    seg_start = times[0]
-
-    def get_mode(t):
-        e_times = [x for x in enabled if x <= t]
-        a_times = [x for x in auton   if x <= t]
-        is_enabled = enabled[max(e_times)] if e_times else False
-        is_auton   = auton[max(a_times)]   if a_times else False
-        if not is_enabled:
-            return "disabled"
-        return "auton" if is_auton else "teleop"
-
-    for t in times:
-        mode = get_mode(t)
-        if mode != prev_mode:
-            if prev_mode is not None:
-                segments.append({"start": seg_start, "end": t, "mode": prev_mode})
-            seg_start = t
-            prev_mode = mode
-
-    if prev_mode:
-        segments.append({"start": seg_start, "end": times[-1], "mode": prev_mode})
-
-    return segments
