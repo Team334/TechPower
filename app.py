@@ -85,7 +85,8 @@ def _infer_match_name(filename: str) -> str:
 @app.route("/")
 def index():
     return render_template("index.html", example_sessions=list(EXAMPLES.values()),
-                           version=CONFIG["app"]["version"], prefix_map=PREFIX_MAP)
+                           version=CONFIG["app"]["version"], prefix_map=PREFIX_MAP,
+                           field=CONFIG.get("field"))
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -279,6 +280,18 @@ def run_analysis(paths: dict, match_name: str = "Match") -> dict:
         "battery_current": _list(batt_i[::THIN]),
     }
 
+    # ── Robot pose (blue-origin field coordinates) and speed ───────────────────
+    pose = _zoh(_find(main, MAIN_KEYS["pose"]), t_abs) if "pose" in MAIN_KEYS else None
+    if pose is not None and not np.all(np.isnan(pose)):
+        timeline["pose_x"] = _list(pose[::THIN, 0])
+        timeline["pose_y"] = _list(pose[::THIN, 1])
+        timeline["pose_heading"] = _list(pose[::THIN, 2])
+    else:
+        pose = None
+    speeds = _zoh(_find(main, MAIN_KEYS["chassis_speeds"]), t_abs) if "chassis_speeds" in MAIN_KEYS else None
+    if speeds is not None and not np.all(np.isnan(speeds)):
+        timeline["speed"] = _list(np.hypot(speeds[::THIN, 0], speeds[::THIN, 1]))
+
     # ── Motors (hoot logs run on the CANivore clock; shift onto the main clock) ──
     offsets = {bus: _hoot_offset(parsed[bus], enabled, warnings, bus)
                for bus in ("swerve", "subsystems") if bus in parsed}
@@ -326,6 +339,10 @@ def run_analysis(paths: dict, match_name: str = "Match") -> dict:
 
     brownout_events = _brownouts(_find(main, MAIN_KEYS["brownout"]), t0, t1, grid, batt_v, batt_i,
                                  series["supply_current"])
+    if pose is not None:
+        for ev in brownout_events:
+            x, y = pose[min(int(round(ev["time"] / dt)), len(grid) - 1), :2]
+            ev["x"], ev["y"] = _r(x), _r(y)
 
     return {
         "match_name":          match_name,
@@ -345,6 +362,8 @@ def run_analysis(paths: dict, match_name: str = "Match") -> dict:
         "battery":             _battery_fit(volt, curr),
         "thresholds":          {"sag_voltage": SAG_V, "breaker_amps": BREAKER_A},
         "energy_by_segment":   energy_by_segment,
+        "trajectories":        _trajectories(_find(main, MAIN_KEYS["auto_trajectory"]), t0, t1)
+                               if "auto_trajectory" in MAIN_KEYS else [],
         "energy_by_subsystem": {k: _r(v) for k, v in energy_by_subsystem.items()},
         "subsystems":          CONFIG["subsystems"],
         "motors":              motor_stats,
@@ -452,6 +471,20 @@ def _brownouts(entry, t0: float, t1: float, grid, batt_v, batt_i, supply_by_moto
     return events
 
 
+def _trajectories(entry, t0: float, t1: float, max_points: int = 120) -> list:
+    """Planned auto paths: when each was published (relative s) and its x/y points, thinned for drawing."""
+    if entry is None or not isinstance(entry.values, list):
+        return []
+    out = []
+    for t, pts in zip(entry.times, entry.values):
+        if not t0 <= t <= t1 or not len(pts):
+            continue
+        step = max(1, len(pts) // max_points)
+        xy = np.vstack([pts[::step, :2], pts[-1:, :2]])
+        out.append({"time": _r(t - t0), "points": np.round(xy, 3).tolist()})
+    return out
+
+
 def _battery_fit(volt, curr) -> dict | None:
     """
     Battery model V = V_rest − R·I fitted over loaded samples. R includes the robot's
@@ -503,15 +536,16 @@ def _segments(enabled, auto, t0: float, t1: float) -> list:
 # ── Numeric helpers ────────────────────────────────────────────────────────────
 
 def _zoh(entry, t: np.ndarray, hold_after: bool = False) -> np.ndarray:
-    """Zero-order-hold resample onto t. NaN where the signal has no data."""
-    out = np.full(len(t), np.nan)
+    """Zero-order-hold resample onto t. NaN where the signal has no data. Struct rows stay rows."""
     if entry is None or not len(entry):
-        return out
+        return np.full(len(t), np.nan)
+    values = np.asarray(entry.values, dtype=np.float64)
+    out = np.full((len(t),) + values.shape[1:], np.nan)
     idx = np.searchsorted(entry.times, t, side="right") - 1
     inside = idx >= 0
     if not hold_after:
         inside &= t <= entry.times[-1]
-    out[inside] = np.asarray(entry.values, dtype=np.float64)[idx[inside]]
+    out[inside] = values[idx[inside]]
     return out
 
 

@@ -9,7 +9,10 @@
         "battery_current":     "/Robot/SystemStats/PowerDistribution/TotalCurrent",
         "brownout":            "/Robot/SystemStats/BrownedOut",
         "enabled":             "DS:enabled",
-        "autonomous":          "DS:autonomous"
+        "autonomous":          "DS:autonomous",
+        "pose":                "/Robot/Swerve/Pose",
+        "chassis_speeds":      "/Robot/Swerve/Speeds",
+        "auto_trajectory":     "/Robot/Auto/Current Trajectory"
       }
     },
 
@@ -52,6 +55,18 @@
     { "id": "swerve",     "name": "Swerve Drivetrain",     "color": "#3b82f6" },
     { "id": "subsystems", "name": "Subsystems (CANivore)", "color": "#f97316" }
   ],
+
+  "field": {
+    "comment": "2026 field image from AdvantageScope (see static/img/FIELD_LICENSE.txt). Pixel corners are for the shipped image; blue_wall is the image side where x = 0.",
+    "image": "img/field-2026.webp",
+    "image_size": [1800, 731],
+    "top_left": [241.7, 43.8],
+    "bottom_right": [1558.3, 686.9],
+    "length_m": 16.541,
+    "width_m": 8.069,
+    "blue_wall": "right",
+    "robot_size_m": [0.85, 0.85]
+  },
 
   "thresholds": {
     "sag_voltage": 8.0,

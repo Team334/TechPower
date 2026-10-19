@@ -19,6 +19,15 @@ _NUMERIC = {
     "boolean": ("u1", 1),
 }
 
+# WPILib structs made only of doubles, decoded to rows of this many float64s
+# (Pose2d = x, y, heading rad; ChassisSpeeds = vx, vy, omega). "[]" variants decode to (n, k) arrays.
+_STRUCT_DOUBLES = {
+    "struct:Rotation2d":    1,
+    "struct:Translation2d": 2,
+    "struct:Pose2d":        3,
+    "struct:ChassisSpeeds": 3,
+}
+
 # Header layout per bitfield byte: (entry id len, payload size len, timestamp len)
 _HEADER = [((b & 3) + 1, ((b >> 2) & 3) + 1, ((b >> 4) & 7) + 1) for b in range(256)]
 
@@ -124,6 +133,18 @@ def _decode(arr: np.ndarray, data: bytes, type_str: str, ts: list, offs: list, s
         raw = arr[offs_a[ok, None] + np.arange(width)]
         values = raw.view(dtype).ravel().astype(np.float64)
         return times[ok], values
+
+    k = _STRUCT_DOUBLES.get(type_str)
+    if k is not None:
+        offs_a = np.asarray(offs, dtype=np.int64)
+        ok = np.asarray(sizes) >= 8 * k
+        raw = arr[offs_a[ok, None] + np.arange(8 * k)]
+        return times[ok], raw.view("<f8").reshape(-1, k).copy()
+
+    k = _STRUCT_DOUBLES.get(type_str.removesuffix("[]"))
+    if type_str.endswith("[]") and k is not None:
+        values = [np.frombuffer(data, "<f8", s // (8 * k) * k, o).reshape(-1, k) for o, s in zip(offs, sizes)]
+        return times, values
 
     values = []
     keep = []

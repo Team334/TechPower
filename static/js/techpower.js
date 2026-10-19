@@ -4,6 +4,8 @@
 const MAX_COMPARE = 4;
 const WARN_TEMP = 70, CRIT_TEMP = 90;
 const MIN_ZOOM_S = 2;
+const TRAIL_S = 5;             // seconds of path drawn behind the robot
+const POSE_JUMP_M = 1;         // larger steps between samples are vision resets; don't connect them
 const ROLES = ['main', 'swerve', 'subsystems'];
 const HOOT_RE = /_([0-9A-F]{2})[0-9A-F]{30}_\d{4}-\d{2}-\d{2}_/i;  // mirrors app.py
 
@@ -27,6 +29,8 @@ const State = {
   liveRows: [],
   liveIdx: -1,
   files: {},                          // role → File
+  field: null,                        // field image calibration from config.json
+  fieldScale: 1,
   busy: false,
   theme: null,
   prefixMap: {},
@@ -38,7 +42,7 @@ function readTheme() {
   return {
     ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'), grid: v('--grid'),
     surface: v('--surface'), rule: v('--rule'), critical: v('--critical'),
-    auto: v('--auto'), teleop: v('--teleop'),
+    auto: v('--auto'), teleop: v('--teleop'), brand: v('--brand'),
     series: [1, 2, 3, 4].map(i => v(`--series-${i}`)),
   };
 }
@@ -180,6 +184,7 @@ function showDashboard(data) {
   renderReadouts(data);
   renderScrubber(data);
   renderLiveTable(data);
+  if ($('field-card')) $('field-card').hidden = !(State.field && data.timeline.pose_x);
   renderEnergy(data);
   renderTemperature(data);
   renderBrownouts(data);
@@ -639,6 +644,7 @@ function updateLive() {
   const i = clamp(Math.round(State.t / d.dt), 0, tl.time.length - 1);
   if (i === State.liveIdx) return;
   State.liveIdx = i;
+  drawField(i);
 
   $('live-time').textContent = `${State.t.toFixed(2)} s`;
   const v = tl.battery_voltage[i], a = tl.battery_current[i];
@@ -657,6 +663,120 @@ function updateLive() {
     r.cells[3].textContent = fmt(t, 0);
     r.cells[3].className = tempClass(t);
   }
+}
+
+// ─── Field ────────────────────────────────────────────────────────────────────
+// Blue-origin field metres → CSS pixels on the field image (same mapping as AdvantageScope).
+function fieldPx(x, y) {
+  const f = State.field, [tlx, tly] = f.top_left, [brx, bry] = f.bottom_right;
+  const fx = x / f.length_m * (brx - tlx), fy = y / f.width_m * (bry - tly);
+  const [px, py] = f.blue_wall === 'right' ? [brx - fx, tly + fy] : [tlx + fx, bry - fy];
+  return [px * State.fieldScale, py * State.fieldScale];
+}
+
+function setupField() {
+  const el = $('field');
+  if (!el) return;
+  try { State.field = JSON.parse(el.dataset.field); } catch { return; }
+  const canvas = $('field-canvas');
+  new ResizeObserver(() => {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(el.clientWidth * dpr);
+    canvas.height = Math.round(el.clientHeight * dpr);
+    State.fieldScale = el.clientWidth / State.field.image_size[0];
+    if (State.session && State.liveIdx >= 0) drawField(State.liveIdx);
+  }).observe(el);
+  canvas.addEventListener('click', e => {
+    const d = State.session;
+    if (!d) return;
+    const r = canvas.getBoundingClientRect();
+    const hit = d.brownout_events.find(b => b.x != null &&
+      Math.hypot(...fieldPx(b.x, b.y).map((v, k) => v - (k ? e.clientY - r.top : e.clientX - r.left))) < 8);
+    if (hit) showMoment(hit.time);
+  });
+}
+
+function drawField(i) {
+  const d = State.session, tl = d?.timeline, canvas = $('field-canvas');
+  if (!canvas || !State.field || !tl?.pose_x) return;
+  const ctx = canvas.getContext('2d'), th = State.theme;
+  const dpr = canvas.width / (canvas.clientWidth || 1);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  const X = tl.pose_x, Y = tl.pose_y, Hd = tl.pose_heading;
+
+  // Planned auto path while auto is running
+  if (phaseAt(State.t) === 'auto') {
+    const path = [...(d.trajectories || [])].reverse().find(p => p.time <= State.t + 0.05);
+    if (path) {
+      ctx.save();
+      ctx.strokeStyle = '#ffffff';
+      ctx.globalAlpha = 0.8;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      path.points.forEach(([x, y], k) => { const [px, py] = fieldPx(x, y); k ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Trail, shaded by robot current draw
+  const n = Math.round(TRAIL_S / d.dt), amps = tl.battery_current, peak = d.peak_current || 1;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = th.series[1];
+  for (let k = Math.max(1, i - n); k <= i; k++) {
+    if (X[k] == null || X[k - 1] == null || Math.hypot(X[k] - X[k - 1], Y[k] - Y[k - 1]) > POSE_JUMP_M) continue;
+    const fade = (k - (i - n)) / n;
+    ctx.globalAlpha = (0.2 + 0.8 * clamp((amps[k] ?? 0) / peak, 0, 1)) * (0.35 + 0.65 * fade);
+    const [ax, ay] = fieldPx(X[k - 1], Y[k - 1]), [bx, by] = fieldPx(X[k], Y[k]);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Brownout locations
+  ctx.save();
+  ctx.strokeStyle = th.critical;
+  ctx.fillStyle = th.critical;
+  ctx.lineWidth = 2;
+  for (const b of d.brownout_events) {
+    if (b.x == null) continue;
+    const [px, py] = fieldPx(b.x, b.y);
+    ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2);
+    Math.abs(b.time - State.t) < 0.5 ? ctx.fill() : ctx.stroke();
+  }
+  ctx.restore();
+
+  // Robot: bumper outline with a line to the front
+  const x = X[i], y = Y[i], h = Hd[i];
+  if (x != null && y != null && h != null) {
+    const [L, W] = State.field.robot_size_m, c = Math.cos(h), s = Math.sin(h);
+    const at = (fx, fy) => fieldPx(x + fx * c - fy * s, y + fx * s + fy * c);
+    const corners = [[L / 2, W / 2], [L / 2, -W / 2], [-L / 2, -W / 2], [-L / 2, W / 2]].map(([a, b]) => at(a, b));
+    ctx.save();
+    ctx.beginPath();
+    corners.forEach(([px, py], k) => k ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+    ctx.closePath();
+    ctx.fillStyle = th.brand;
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    const [cx, cy] = at(0, 0), [nx, ny] = at(L / 2, 0);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(nx, ny); ctx.stroke();
+    ctx.restore();
+  }
+
+  const deg = h == null ? null : ((h * 180 / Math.PI + 540) % 360) - 180;
+  $('pose-x').textContent = x == null ? '–' : `${fmt(x, 2)} m`;
+  $('pose-y').textContent = y == null ? '–' : `${fmt(y, 2)} m`;
+  $('pose-h').textContent = deg == null ? '–' : `${fmt(deg, 0)}°`;
+  $('pose-v').textContent = tl.speed?.[i] == null ? '–' : `${fmt(tl.speed[i], 1)} m/s`;
 }
 
 const tempClass = t => t == null ? '' : t >= CRIT_TEMP ? 'val-crit' : t >= WARN_TEMP ? 'val-warn' : '';
@@ -936,6 +1056,7 @@ function init() {
   }
 
   Chart.defaults.font.family = "'Barlow', system-ui, sans-serif";
+  setupField();
   bindDropZone();
   bindTrack();
   bindChartWheel();

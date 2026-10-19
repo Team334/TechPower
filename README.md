@@ -1,6 +1,6 @@
 # TechPower
 
-Post-match power review for FRC robots. Load a match's robot log and CANivore hoot logs to see
+FRC Team 334's post-match power review for FRC robots. Load a match's robot log and CANivore hoot logs to see
 battery sag, brownouts, whole-robot and per-motor current, motor temperature, and where the
 energy went.
 
@@ -40,6 +40,9 @@ matching the first robot-enable edge in each. If the robot never enabled, a warn
 - Space plays, arrow keys step 1 s (Shift: 5 s).
 - Click motors in **Values at cursor** to compare up to four in the motor charts.
 - Click the brownout count to jump to the next brownout.
+- The **Field** panel shows where the robot was at the cursor (`Pose2d`, blue origin, same view as
+  AdvantageScope), with a 5 s trail shaded by current draw, the planned auto path, and red rings
+  where brownouts happened. Select a ring to jump to it.
 - **Brownouts** lists every brownout with its depth, the robot's draw and the three motors pulling
   the most supply current; select one to jump to it.
 - Example matches can be linked directly: `/#example=Q17&tab=energy`.
@@ -57,11 +60,14 @@ matching the first robot-enable edge in each. If the robot never enabled, a warn
 
 `config.json` maps log keys and motors:
 
-- `log_sources.wpilog.keys` — robot-log entry names. Battery current comes from the PDH
+- `log_sources.wpilog.keys` — robot-log entry names, including `pose` (`struct:Pose2d`),
+  `chassis_speeds` and `auto_trajectory` (`struct:Pose2d[]`). Battery current comes from the PDH
   `TotalCurrent` (the SystemStats `BatteryCurrent` entry is only the roboRIO's own draw).
 - `log_sources.hoot.signal_keys` — Phoenix 6 TalonFX signal names.
 - `thresholds` — `sag_voltage` for the "time under" readout, `breaker_amps` for the per-motor
   "over breaker" time (match your PDH breakers).
+- `field` — field image and its pixel calibration (copied from AdvantageScope's field config,
+  scaled to the shipped image), and robot bumper size for drawing.
 - `motors` — one entry per TalonFX: CANivore bus, CAN ID, PDH channel, subsystem.
 
 ## API
@@ -79,3 +85,8 @@ so reopening a match is instant.
 - Video player
 - View subsystem (hoot -> wpilog)
 - AdvantageScope-style timeline
+
+## Credits
+
+The 2026 field image comes from [AdvantageScope](https://github.com/Mechanical-Advantage/AdvantageScope)
+by FRC 6328; see `static/img/FIELD_LICENSE.txt`.
