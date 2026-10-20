@@ -7,7 +7,9 @@ const MIN_ZOOM_S = 2;
 const TRAIL_S = 5;             // seconds of path drawn behind the robot
 const POSE_JUMP_M = 1;         // larger steps between samples are vision resets; don't connect them
 const ROLES = ['main', 'swerve', 'subsystems'];
-const HOOT_RE = /_([0-9A-F]{2})[0-9A-F]{30}_\d{4}-\d{2}-\d{2}_/i;  // mirrors app.py
+// FRC_20260407_183251_NYN2_Q17.wpilog → main; NYN2_Q17_CC478FD…_2026-04-07_18-32-51.hoot.wpilog → CANivore "CC"
+const HOOT_RE = /^(.*?)_([0-9A-F]{2})[0-9A-F]{30}_\d{4}-\d{2}-\d{2}_/i;
+const MAIN_RE = /^FRC_\d{8}_\d{6}_(.+)/;
 
 const $ = id => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -33,7 +35,7 @@ const State = {
   fieldScale: 1,
   busy: false,
   theme: null,
-  prefixMap: {},
+  config: null,                       // web/config.json
 };
 
 function readTheme() {
@@ -56,7 +58,13 @@ const subsystemColorValue = idx => State.theme.series[SUBSYSTEM_SLOTS[idx % 4]];
 function classify(name) {
   const m = HOOT_RE.exec(name);
   if (!m) return 'main';
-  return State.prefixMap[m[1].toUpperCase()] || 'unknown';
+  return State.config.log_sources.hoot.prefix_map[m[2].toUpperCase()] || 'unknown';
+}
+
+// 'NYN2_Q17' from either a main or hoot filename, for sanity-checking a set of files.
+function matchToken(name) {
+  const m = HOOT_RE.exec(name) || MAIN_RE.exec(name.split('.')[0]);
+  return m ? m[1].toUpperCase() : null;
 }
 
 function addFiles(list) {
@@ -112,35 +120,54 @@ function setBusyUI(busy) {
 
 function analyzeFiles() {
   if (!State.files.main) { setStatus('Add the robot log (FRC_*.wpilog) first.', true); return; }
-  const fd = new FormData();
-  Object.values(State.files).forEach(f => fd.append('logs', f));
+  const files = { ...State.files };
+  const tokens = new Set(Object.values(files).map(f => matchToken(f.name)).filter(Boolean));
+  const warnings = tokens.size > 1 ? [`Files look like they're from different matches (${[...tokens].sort().join(', ')}).`] : [];
+  const base = files.main.name.replace(/\.[^.]*$/, '');
+  const matchName = MAIN_RE.exec(base)?.[1].replaceAll('_', ' ') ?? base;
   history.replaceState(null, '', location.pathname);
-  requestAnalysis('/api/analyze', { method: 'POST', body: fd },
-    'Analyzing. Large hoot logs take a few seconds the first time.');
+  openSession(() => analyzeInWorker(files, matchName, warnings), 'Analyzing on this computer…');
+}
+
+function analyzeInWorker(files, matchName, warnings) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker('js/worker.js', { type: 'module' });
+    worker.onmessage = ({ data }) => {
+      worker.terminate();
+      if (data.error) reject(new Error(data.error)); else resolve(data.result);
+    };
+    worker.onerror = e => {
+      worker.terminate();
+      reject(new Error(`Analysis failed: ${e.message || 'the analysis worker could not start'}.`));
+    };
+    worker.postMessage({ files, config: State.config, matchName, warnings });
+  });
 }
 
 function loadExample(id) {
+  const sess = (State.config.example_logs?.sessions || []).find(s => s.id === id);
+  if (!sess) { setStatus(`There's no example match called "${id}".`, true); return; }
   if (new URLSearchParams(location.hash.slice(1)).get('example') !== id) {
     history.replaceState(null, '', `#example=${encodeURIComponent(id)}`);
   }
-  requestAnalysis(`/api/example/${encodeURIComponent(id)}`, {}, 'Opening example match…');
+  openSession(async () => {
+    const res = await fetch(`examples/${encodeURIComponent(id)}.json`);
+    if (!res.ok) throw new Error(`Couldn't load the ${sess.name} example (${res.status}).`);
+    return res.json();
+  }, 'Opening example match…');
 }
 
-async function requestAnalysis(url, options, label) {
+async function openSession(load, label) {
   if (State.busy) return;
   State.busy = true;
   setBusyUI(true);
   setStatus(label, false, true);
   try {
-    const res = await fetch(url, options);
-    let data;
-    try { data = await res.json(); } catch { throw new Error(`Server error ${res.status}. Check the terminal running app.py.`); }
-    if (!res.ok) throw new Error(data.error || `Server error ${res.status}.`);
+    const data = await load();
     setStatus('');
     showDashboard(data);
   } catch (err) {
-    const offline = err instanceof TypeError;
-    setStatus(offline ? "Can't reach the TechPower server. Is app.py still running?" : err.message, true);
+    setStatus(err.message, true);
   } finally {
     State.busy = false;
     setBusyUI(false);
@@ -674,10 +701,12 @@ function fieldPx(x, y) {
   return [px * State.fieldScale, py * State.fieldScale];
 }
 
-function setupField() {
+function setupField(field) {
   const el = $('field');
-  if (!el) return;
-  try { State.field = JSON.parse(el.dataset.field); } catch { return; }
+  if (!field) return;
+  State.field = field;
+  $('field-img').src = field.image;
+  el.style.aspectRatio = `${field.image_size[0]} / ${field.image_size[1]}`;
   const canvas = $('field-canvas');
   new ResizeObserver(() => {
     const dpr = window.devicePixelRatio || 1;
@@ -1046,17 +1075,38 @@ function bindDropZone() {
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-function init() {
-  State.theme = readTheme();
-  try { State.prefixMap = JSON.parse($('upload-view').dataset.prefixMap || '{}'); } catch { /* keep {} */ }
+function renderExamples(sessions) {
+  $('examples').hidden = !sessions.length;
+  $('example-btns').replaceChildren(...sessions.map(sess => {
+    const b = Object.assign(document.createElement('button'), { className: 'btn example-btn', textContent: sess.name });
+    b.addEventListener('click', () => loadExample(sess.id));
+    return b;
+  }));
+}
 
+async function init() {
+  State.theme = readTheme();
+  if (location.protocol === 'file:') {
+    setStatus('Open TechPower through a web server, not as a file. See the README.', true);
+    return;
+  }
   if (typeof Chart === 'undefined') {
-    setStatus('Chart library failed to load. Check static/js/vendor/chart.umd.min.js.', true);
+    setStatus('Chart library failed to load. Check js/vendor/chart.umd.min.js.', true);
+    return;
+  }
+  try {
+    const res = await fetch('config.json');
+    if (!res.ok) throw new Error(res.status);
+    State.config = await res.json();
+  } catch {
+    setStatus("Couldn't load config.json.", true);
     return;
   }
 
+  $('app-version').textContent = `v${State.config.app.version}`;
+  renderExamples(State.config.example_logs?.sessions || []);
   Chart.defaults.font.family = "'Barlow', system-ui, sans-serif";
-  setupField();
+  setupField(State.config.field);
   bindDropZone();
   bindTrack();
   bindChartWheel();
@@ -1065,7 +1115,6 @@ function init() {
   $('zoom-out-btn').addEventListener('click', () => zoomStep(2));
   $('analyze-btn').addEventListener('click', analyzeFiles);
   $('clear-btn').addEventListener('click', clearFiles);
-  document.querySelectorAll('.example-btn').forEach(b => b.addEventListener('click', () => loadExample(b.dataset.example)));
   $('new-session-btn').addEventListener('click', newSession);
   $('play-btn').addEventListener('click', () => togglePlay());
   $('speed-btn').addEventListener('click', cycleSpeed);

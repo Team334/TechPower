@@ -57,7 +57,7 @@
   ],
 
   "field": {
-    "comment": "2026 field image from AdvantageScope (see static/img/FIELD_LICENSE.txt). Pixel corners are for the shipped image; blue_wall is the image side where x = 0.",
+    "comment": "2026 field image from AdvantageScope (see img/FIELD_LICENSE.txt). Pixel corners are for the shipped image; blue_wall is the image side where x = 0.",
     "image": "img/field-2026.webp",
     "image_size": [1800, 731],
     "top_left": [241.7, 43.8],

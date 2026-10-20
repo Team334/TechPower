@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "examples": "node tools/build-examples.mjs"
+  }
+}

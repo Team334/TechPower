@@ -5,12 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TechPower</title>
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
+    <link rel="icon" type="image/png" href="img/favicon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600&display=swap" rel="stylesheet">
-    <script defer src="{{ url_for('static', filename='js/vendor/chart.umd.min.js') }}"></script>
-    <script defer src="{{ url_for('static', filename='js/techpower.js') }}?v={{ version }}"></script>
+    <script defer src="js/vendor/chart.umd.min.js"></script>
+    <script defer src="js/techpower.js"></script>
     <style>
         :root {
             color-scheme: light;
@@ -566,19 +566,20 @@
 <body>
     <header class="app-bar">
         <picture>
-            <source srcset="{{ url_for('static', filename='img/mark-dark.png') }}" media="(prefers-color-scheme: dark)">
-            <img class="brand-mark" src="{{ url_for('static', filename='img/mark.png') }}" alt="" width="29" height="30">
+            <source srcset="img/mark-dark.png" media="(prefers-color-scheme: dark)">
+            <img class="brand-mark" src="img/mark.png" alt="" width="29" height="30">
         </picture>
         <span class="wordmark">Tech<b>Power</b></span>
         <span class="team">Team 334</span>
-        <span class="version">v{{ version }}</span>
+        <span class="version" id="app-version"></span>
     </header>
 
     <!-- ── Upload ── -->
-    <main id="upload-view" class="upload" data-prefix-map='{{ prefix_map | tojson }}'>
+    <main id="upload-view" class="upload">
         <h1>Review a match's power use</h1>
         <p class="lede">Add the robot log and both CANivore logs from one match. TechPower lines them up and shows
-            battery sag, brownouts, motor current, temperature and where the energy went.</p>
+            battery sag, brownouts, motor current, temperature and where the energy went. Logs are read on this
+            computer and never uploaded.</p>
 
         <label id="drop-zone" class="drop">
             <input type="file" id="file-input" multiple accept=".wpilog" hidden>
@@ -608,16 +609,10 @@
         </div>
         <div id="upload-status" class="status" role="status" aria-live="polite"></div>
 
-        {% if example_sessions %}
-        <section class="examples">
+        <section class="examples" id="examples" hidden>
             <h2>Or open an example match</h2>
-            <div class="example-btns">
-                {% for session in example_sessions %}
-                <button class="btn example-btn" data-example="{{ session.id }}">{{ session.name }}</button>
-                {% endfor %}
-            </div>
+            <div class="example-btns" id="example-btns"></div>
         </section>
-        {% endif %}
     </main>
 
     <!-- ── Dashboard ── -->
@@ -710,15 +705,13 @@
             </div>
 
             <aside class="live" aria-label="Values at cursor">
-                {% if field %}
                 <div class="card field-card" id="field-card" hidden>
                     <div class="live-head">
                         <h2>Field</h2>
                         <span class="sub">Blue origin</span>
                     </div>
-                    <div class="field" id="field" data-field='{{ field | tojson }}'
-                        style="aspect-ratio: {{ field.image_size[0] }} / {{ field.image_size[1] }}">
-                        <img src="{{ url_for('static', filename=field.image) }}" alt="2026 field, blue alliance wall on the right" draggable="false">
+                    <div class="field" id="field">
+                        <img id="field-img" alt="2026 field, blue alliance wall on the right" draggable="false">
                         <canvas id="field-canvas" aria-label="Robot position on the field"></canvas>
                     </div>
                     <div class="batt-now pose-now">
@@ -730,7 +723,6 @@
                     <p class="sub field-key">Trail shows the last 5 s; darker means more current draw. Red rings mark
                         brownouts; select one to jump to it. The dashed line is the planned auto path.</p>
                 </div>
-                {% endif %}
                 <div class="card">
                 <div class="live-head">
                     <h2>Values at cursor</h2>

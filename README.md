@@ -4,21 +4,48 @@ FRC Team 334's post-match power review for FRC robots. Load a match's robot log 
 battery sag, brownouts, whole-robot and per-motor current, motor temperature, and where the
 energy went.
 
-## Setup
+TechPower is a static web app: logs are read and analyzed in the browser, on your computer, and
+never uploaded. It works offline once the page has loaded.
 
-Requires Python 3.10+.
+## Running it
+
+**Online:** GitHub Pages deploys `web/` on every push to `main`
+(`.github/workflows/pages.yml`). One-time setup: repo **Settings → Pages → Source: GitHub Actions**.
+The site is then at `https://team334.github.io/TechPower/`.
+
+**Locally:** serve the `web/` folder with any static file server, then open http://localhost:8000:
 
 ```bash
-pip install -r requirements.txt
-python app.py          # → http://localhost:5000
+py -m http.server 8000 -d web     # Windows (or ./run.sh on macOS / Linux)
 ```
 
-Example logs are stored with Git LFS. If an example fails to open with a "Git LFS pointer"
-error, run `git lfs pull`.
+Opening `web/index.html` directly as a file doesn't work; browsers block the analysis worker there.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `web/index.html` | Page and styles |
+| `web/js/techpower.js` | Dashboard UI |
+| `web/js/analysis.js` | WPILog parser and power analysis (shared by the browser and Node) |
+| `web/js/worker.js` | Runs the analysis off the main thread |
+| `web/config.json` | Log keys, motors, thresholds, field calibration |
+| `web/examples/*.json` | Pre-analyzed example matches |
+| `tools/build-examples.mjs` | Rebuilds the example JSON |
+
+## Example matches
+
+The example logs in `assets/example-logs/` are stored with Git LFS, which GitHub Pages can't
+serve, so the site ships their analysis results instead. After changing the analysis or
+`config.json`, rebuild them (needs Node 20+ and `git lfs pull`):
+
+```bash
+node tools/build-examples.mjs
+```
 
 ## Logs
 
-Upload up to three `.wpilog` files from one match:
+Add up to three `.wpilog` files from one match:
 
 | File | Pattern | Needed for |
 |---|---|---|
@@ -27,7 +54,7 @@ Upload up to three `.wpilog` files from one match:
 | Subsystems CANivore | `*_01<serial>_<date>.hoot.wpilog` | Subsystem motor data |
 
 Hoot files must be converted to `.wpilog` first (Phoenix Tuner / owlet). The two-character
-prefix after the match name picks the bus (`prefix_map` in `config.json`).
+prefix after the match name picks the bus (`prefix_map` in `web/config.json`).
 
 Hoot logs run on the CANivore's clock, so TechPower shifts them onto the robot log's clock by
 matching the first robot-enable edge in each. If the robot never enabled, a warning is shown.
@@ -45,7 +72,7 @@ matching the first robot-enable edge in each. If the robot never enabled, a warn
   where brownouts happened. Select a ring to jump to it.
 - **Brownouts** lists every brownout with its depth, the robot's draw and the three motors pulling
   the most supply current; select one to jump to it.
-- Example matches can be linked directly: `/#example=Q17&tab=energy`.
+- Example matches can be linked directly: `#example=Q17&tab=energy`.
 
 ## Metrics
 
@@ -58,7 +85,7 @@ matching the first robot-enable edge in each. If the robot never enabled, a warn
 
 ## Configuration
 
-`config.json` maps log keys and motors:
+`web/config.json` maps log keys and motors:
 
 - `log_sources.wpilog.keys` — robot-log entry names, including `pose` (`struct:Pose2d`),
   `chassis_speeds` and `auto_trajectory` (`struct:Pose2d[]`). Battery current comes from the PDH
@@ -70,17 +97,6 @@ matching the first robot-enable edge in each. If the robot never enabled, a warn
   scaled to the shipped image), and robot bumper size for drawing.
 - `motors` — one entry per TalonFX: CANivore bus, CAN ID, PDH channel, subsystem.
 
-## API
-
-| Route | Method | Description |
-|---|---|---|
-| `/` | GET | Dashboard |
-| `/api/analyze` | POST | Analyze uploaded logs (multipart field `logs`, 1–3 files) |
-| `/api/example/<id>` | GET | Analyze a bundled example session (e.g. `Q17`) |
-
-Errors come back as `{"error": "..."}` with a 4xx/5xx status. Results are cached in memory,
-so reopening a match is instant.
-
 ## TODO
 - Video player
 - View subsystem (hoot -> wpilog)
@@ -89,4 +105,4 @@ so reopening a match is instant.
 ## Credits
 
 The 2026 field image comes from [AdvantageScope](https://github.com/Mechanical-Advantage/AdvantageScope)
-by FRC 6328; see `static/img/FIELD_LICENSE.txt`.
+by FRC 6328; see `web/img/FIELD_LICENSE.txt`.
